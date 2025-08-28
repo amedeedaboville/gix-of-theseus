@@ -1,21 +1,56 @@
-use clap::Parser;
-use gix_of_theseus::run_theseus;
+use std::{env::temp_dir, fs::File};
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(short, long)]
-    repo_path: String,
+use anyhow::Result;
+use clap::Parser;
+use gix_of_theseus::{plot, theseus};
+
+#[derive(Debug, clap::Parser)]
+#[clap(
+    name = "gix-of-theseus",
+    about = "Collects and plots historical data about the composition of git repositories.",
+    version
+)]
+struct Cli {
+    #[clap(subcommand)]
+    subcommand: Subcommands,
 }
 
-fn main() {
-    let args = Args::parse();
-    match run_theseus(&args.repo_path) {
-        Ok(results) => {
-            println!("{:?}", results);
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
+#[derive(Debug, Parser)]
+pub struct PlotArgs {
+    #[clap(short, long)]
+    input_file: String,
+    #[clap(short, long)]
+    output_file: String,
+}
+#[derive(Debug, Parser)]
+struct TheseusArgs {
+    repo_path: String,
+    #[clap(short, long)]
+    image_file: Option<String>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum Subcommands {
+    //Just run the plot script on a cohorts.json file
+    Plot(PlotArgs),
+    /// Collect the data and optionally plot a chart for a repo.
+    Theseus(TheseusArgs),
+}
+
+fn main() -> Result<()> {
+    let args = Cli::parse();
+    match args.subcommand {
+        Subcommands::Plot(args) => plot::run_stackplot(args.input_file, args.output_file),
+        Subcommands::Theseus(args) => {
+            let resultvec = theseus::run_theseus(&args.repo_path).expect("Error running theseus");
+            if let Some(image_file) = args.image_file {
+                let repo_last_part = args.repo_path.split('/').last().unwrap();
+                let temp_file = temp_dir().join(format!("{}.json", repo_last_part));
+                println!("Writing to {}", temp_file.display());
+                serde_json::to_writer_pretty(File::create(temp_file.clone())?, &resultvec)?;
+                plot::run_stackplot(temp_file.display().to_string(), image_file)?;
+            }
+            Ok(())
         }
     }
 }

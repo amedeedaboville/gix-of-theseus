@@ -1,34 +1,29 @@
+use anyhow::Result;
+use std::io::Write;
 use std::process::Command;
+use std::{env, fs};
 
-pub fn stack_plot(
-    input_fn: &str,
-    outfile: &str,
-    max_n: usize,
-    normalize: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::new("src/stackplot.py");
-    cmd.arg(input_fn)
+const STACKPLOT_SCRIPT: &str = include_str!("stackplot.py");
+
+pub fn run_stackplot(input_file: String, output_file: String) -> Result<()> {
+    let mut path = env::temp_dir();
+    path.push("stackplot.py");
+
+    let mut file = fs::File::create(&path)?;
+    file.write_all(STACKPLOT_SCRIPT.as_bytes())?;
+
+    let status = Command::new("uv")
+        .arg("run")
+        .arg(&path)
         .arg("--outfile")
-        .arg(outfile)
-        .arg("--max-n")
-        .arg(max_n.to_string());
+        .arg(output_file)
+        .arg(input_file)
+        .status()?;
 
-    if normalize {
-        cmd.arg("--normalize");
+    if !status.success() {
+        anyhow::bail!("Failed to execute 'uv run {}'", path.display());
     }
 
-    let status = cmd.status()?;
-
-    if status.success() {
-        println!("Writing output to {}", outfile);
-        Ok(())
-    } else {
-        let output = cmd.output()?;
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "Python script failed with status: {}. Stderr:\n{}",
-            status, stderr
-        )
-        .into())
-    }
+    fs::remove_file(path)?;
+    Ok(())
 }

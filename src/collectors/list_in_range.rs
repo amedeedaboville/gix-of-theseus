@@ -56,5 +56,7 @@ pub fn list_commits_with_granularity(
         commits_by_period.entry(key).or_insert_with(|| commit);
     }
 
-    Ok(commits_by_period.into_values().collect())
+    let mut commits = commits_by_period.into_values().collect::<Vec<_>>();
+    commits.sort_by_key(|c| c.time().unwrap());
+    Ok(commits)
 }
