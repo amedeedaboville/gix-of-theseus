@@ -1,9 +1,9 @@
 use crate::blame::{FileBlame, Keyable, LineDiffs, LineNumber};
 use crate::collectors::list_in_range::Granularity;
 use crate::collectors::list_in_range::list_commits_with_granularity;
+use anyhow::Result;
 use dashmap::DashMap;
-use gix::bstr::BString;
-use gix::bstr::ByteSlice;
+use gix::bstr::{BString, ByteSlice};
 use gix::date::time::CustomFormat;
 use gix::diff::blob::diff as blob_diff;
 use gix::diff::object::TreeRefIter;
@@ -11,27 +11,26 @@ use gix::diff::tree_with_rewrites;
 use gix::diff::tree_with_rewrites::{Action, Change, ChangeRef};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use thread_local::ThreadLocal;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
 /// Represents blame information for the entire repository at a specific commit
 /// Uses Dashmap so we can update entries concurrently for a slight boost
 #[derive(Debug, Clone)]
-pub struct RepositoryBlameSnapshot<CohortKey>
+pub struct RepositoryBlameSnapshot<CommitKey>
 where
-    CohortKey: Keyable,
+    CommitKey: Keyable,
 {
     pub commit_id: gix::ObjectId,
-    pub file_blames: DashMap<BString, FileBlame<CohortKey>>,
-    pub running_cohort_stats: DashMap<CohortKey, u64>,
+    pub file_blames: DashMap<BString, FileBlame<CommitKey>>,
+    pub running_cohort_stats: DashMap<CommitKey, u64>,
 }
 
-impl<CohortKey> RepositoryBlameSnapshot<CohortKey>
+impl<CommitKey> RepositoryBlameSnapshot<CommitKey>
 where
-    CohortKey: Keyable,
+    CommitKey: Keyable,
 {
     pub fn new(commit_id: gix::ObjectId) -> Self {
         Self {
@@ -41,7 +40,7 @@ where
         }
     }
 
-    fn add_file(&self, path: &BString, total_lines: LineNumber, cohort: CohortKey) {
+    fn add_file(&self, path: &BString, total_lines: LineNumber, cohort: CommitKey) {
         let file_blame = FileBlame::new(total_lines, cohort);
         self.file_blames.insert(path.clone(), file_blame);
         self.running_cohort_stats
@@ -69,11 +68,11 @@ where
         Ok(())
     }
 
-    pub fn modify_file(&self, path: &BString, line_diffs: LineDiffs<CohortKey>) {
+    pub fn modify_file(&self, path: &BString, line_diffs: LineDiffs<CommitKey>) {
         self.file_blames
             .view(path, |_key, old_blame| {
                 let new_blame = old_blame.apply_line_diffs(line_diffs);
-                let mut cohort_diff: HashMap<CohortKey, i64> = HashMap::new();
+                let mut cohort_diff: HashMap<CommitKey, i64> = HashMap::new();
                 for (cohort, line_count) in old_blame.cohort_stats() {
                     *cohort_diff.entry(cohort).or_insert(0) -= line_count as i64;
                 }
@@ -93,7 +92,7 @@ where
     }
     pub fn repository_cohort_stats(&self) -> Vec<(String, u64)>
     where
-        CohortKey: Keyable + Send + Sync,
+        CommitKey: Keyable + Send + Sync,
     {
         self.running_cohort_stats
             .iter()
