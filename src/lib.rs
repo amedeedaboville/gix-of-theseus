@@ -1,5 +1,6 @@
 pub mod blame;
 pub mod collectors;
+pub mod formatter;
 pub mod plot;
 pub mod theseus;
 

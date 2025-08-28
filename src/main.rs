@@ -2,7 +2,7 @@ use std::{env::temp_dir, fs::File};
 
 use anyhow::Result;
 use clap::Parser;
-use gix_of_theseus::{plot, theseus};
+use gix_of_theseus::{formatter, plot, theseus};
 
 #[derive(Debug, clap::Parser)]
 #[clap(
@@ -42,12 +42,13 @@ fn main() -> Result<()> {
     match args.subcommand {
         Subcommands::Plot(args) => plot::run_stackplot(args.input_file, args.output_file),
         Subcommands::Theseus(args) => {
-            let resultvec = theseus::run_theseus(&args.repo_path).expect("Error running theseus");
+            let res = theseus::run_theseus(&args.repo_path).expect("Error running theseus");
+            let formatted_data = formatter::format_cohort_data(res);
             if let Some(image_file) = args.image_file {
                 let repo_last_part = args.repo_path.split('/').last().unwrap();
                 let temp_file = temp_dir().join(format!("{}.json", repo_last_part));
                 println!("Writing to {}", temp_file.display());
-                serde_json::to_writer_pretty(File::create(temp_file.clone())?, &resultvec)?;
+                serde_json::to_writer_pretty(File::create(temp_file.clone())?, &formatted_data)?;
                 plot::run_stackplot(temp_file.display().to_string(), image_file)?;
             }
             Ok(())

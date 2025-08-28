@@ -11,13 +11,13 @@ use gix::diff::tree_with_rewrites;
 use gix::diff::tree_with_rewrites::{Action, Change, ChangeRef};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use thread_local::ThreadLocal;
 
 /// Represents blame information for the entire repository at a specific commit
 /// Uses Dashmap so we can update entries concurrently for a slight boost
+/// A CommitKey is a usize that is essentially a pointer into an array of commit info
 #[derive(Debug, Clone)]
 pub struct RepositoryBlameSnapshot<CommitKey>
 where
@@ -90,25 +90,29 @@ where
             })
             .unwrap();
     }
-    pub fn repository_cohort_stats(&self) -> Vec<(String, u64)>
+    pub fn repository_cohort_stats(&self) -> Vec<(CommitKey, u64)>
     where
-        CommitKey: Keyable + Send + Sync,
+        CommitKey: Keyable,
     {
         self.running_cohort_stats
             .iter()
-            .map(|ref_multi| (ref_multi.key().to_string(), *ref_multi.value()))
+            .map(|ref_multi| (*ref_multi.key(), *ref_multi.value()))
             .collect()
     }
 }
-// The data in cohorts.json
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CohortData {
-    pub y: Vec<Vec<u64>>,
-    pub ts: Vec<String>,
-    pub labels: Vec<String>,
+pub struct CommitCohortInfo {
+    pub id: gix::ObjectId,
+    pub time_string: String,
+    pub year: u32,
+    pub cohort: usize,
 }
-
-pub fn run_theseus(repo_path: &str) -> Result<CohortData, Box<dyn std::error::Error>> {
+pub struct TheseusResult {
+    //One entry per commit, with metadata about it and which cohort it belongs to
+    pub commit_cohort_info: Vec<CommitCohortInfo>,
+    // One entry per commit, with the child vec being key,value pairs of commit key + number of lines
+    pub cohort_data: Vec<Vec<(usize, u64)>>,
+}
+pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error::Error>> {
     let repo = gix::open(repo_path)?;
     let safe_repo = repo.clone().into_sync();
     let weekly_commits = list_commits_with_granularity(&repo, Granularity::Weekly, None, None)?;
@@ -130,24 +134,31 @@ pub fn run_theseus(repo_path: &str) -> Result<CohortData, Box<dyn std::error::Er
             .unwrap()
             .progress_chars("=>-"),
     );
-    let commit_trees_and_cohorts: Vec<(gix::ObjectId, gix::date::Time, String, Vec<u8>)> = weekly_commits
-    .into_iter()
-    .map(|commit| {
-        let time = commit.time().unwrap();
-        (
-            commit.id().to_owned().into(),
-            time,
-            time.format(CustomFormat::new("%Y-%m-%d %H:%M:%S")),
-            commit.tree().unwrap().detach().data,
-        )
-    })
-    .collect();
-    // We do this detaching serially, so that we can look up the commit data concurrently afterwards
-    let all_cohort_labels: Vec<String> = commit_trees_and_cohorts
-    .iter()
-    .map(|(_, _, ts, _)| ts.clone())
-    .collect();
-    let commit_changes_and_cohorts: Vec<(Vec<Change>, usize)> = (0..commit_trees_and_cohorts.len())
+    let commit_trees_and_years: Vec<(gix::ObjectId, gix::date::Time, String, Vec<u8>, u32)> =
+        weekly_commits
+            .into_iter()
+            .map(|commit| {
+                let time = commit.time().unwrap();
+                (
+                    commit.id().to_owned().into(),
+                    time,
+                    time.format(CustomFormat::new("%Y-%m-%d %H:%M:%S")),
+                    commit.tree().unwrap().detach().data,
+                    time.format(CustomFormat::new("%Y")).parse().unwrap(),
+                )
+            })
+            .collect();
+    let commit_infos = commit_trees_and_years
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _time, ts, _, year))| CommitCohortInfo {
+            id: id.clone(),
+            time_string: ts.clone(),
+            year: *year,
+            cohort: i,
+        })
+        .collect();
+    let commit_changes_and_cohorts: Vec<(Vec<Change>, usize)> = (0..commit_trees_and_years.len())
         .into_par_iter()
         .map(|i| {
             let (repo, platform_cell) = get_thread_local_vars();
@@ -156,9 +167,9 @@ pub fn run_theseus(repo_path: &str) -> Result<CohortData, Box<dyn std::error::Er
             let mut tree_diff_state = gix::diff::tree::State::default();
             let mut objects = &repo.objects;
 
-            let (_id, _cohort, _ts, current_tree_data) = &commit_trees_and_cohorts[i];
+            let (_id, _time, _ts, current_tree_data, _year) = &commit_trees_and_years[i];
             let previous_tree_data = if i > 0 {
-                commit_trees_and_cohorts[i - 1].3.as_slice()
+                commit_trees_and_years[i - 1].3.as_slice()
             } else {
                 &[]
             };
@@ -292,30 +303,8 @@ pub fn run_theseus(repo_path: &str) -> Result<CohortData, Box<dyn std::error::Er
         results.push(current_snapshot.repository_cohort_stats());
     }
 
-    let ts: Vec<String> = all_cohort_labels.clone();
-    let mut all_labels_set = std::collections::BTreeSet::new();
-    for snapshot in &results {
-        for (label, _) in snapshot {
-            all_labels_set.insert(label.clone());
-        }
-    }
-    let labels: Vec<String> = all_labels_set.into_iter().collect();
-    let label_to_index: std::collections::HashMap<_, _> = labels
-        .iter()
-        .enumerate()
-        .map(|(i, label)| (label.clone(), i))
-        .collect();
-
-    let mut y = vec![vec![0; results.len()]; labels.len()];
-
-    for (t_idx, snapshot) in results.iter().enumerate() {
-        for (label, count) in snapshot {
-            if let Some(&label_idx) = label_to_index.get(label) {
-                y[label_idx][t_idx] = *count;
-            }
-        }
-    }
-
-    let cohort_data = CohortData { y, ts, labels };
-    Ok(cohort_data)
+    Ok(TheseusResult {
+        commit_cohort_info: commit_infos,
+        cohort_data: results,
+    })
 }

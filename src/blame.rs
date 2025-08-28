@@ -7,27 +7,51 @@ use std::{
 // Has to be u32 bc gix returns Ranges of u32s in its diff output
 pub type LineNumber = u32;
 pub type LineDelta = i64;
-pub type LineDiffs<CohortKey> = Vec<(
+pub type LineDiffs<CommitKey> = Vec<(
     std::ops::Range<LineNumber>,
     std::ops::Range<LineNumber>,
-    CohortKey,
+    CommitKey,
 )>;
 
-pub trait Keyable: Copy + PartialEq + Display + Debug + Eq + Hash + Send + Sync {}
-impl<T: Copy + PartialEq + Display + Debug + Eq + Hash + Send + Sync> Keyable for T {}
+pub trait Keyable:
+    std::fmt::Debug
+    + Send
+    + Sync
+    + Copy
+    + std::hash::Hash
+    + Eq
+    + std::str::FromStr
+    + std::fmt::Display
+    + Ord
+    + 'static
+{
+}
+impl<T> Keyable for T where
+    T: std::fmt::Debug
+        + Send
+        + Sync
+        + Copy
+        + std::hash::Hash
+        + Eq
+        + std::str::FromStr
+        + std::fmt::Display
+        + Ord
+        + 'static
+{
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BlameRange<CohortKey>
+pub struct BlameRange<CommitKey>
 where
-    CohortKey: Keyable,
+    CommitKey: Keyable,
 {
     pub start_line: LineNumber,
     pub line_count: LineNumber,
-    pub cohort: CohortKey,
+    pub cohort: CommitKey,
 }
 
-impl<CohortKey: Keyable> BlameRange<CohortKey> {
-    pub fn new(start_line: LineNumber, line_count: LineNumber, cohort: CohortKey) -> Self {
+impl<CommitKey: Keyable> BlameRange<CommitKey> {
+    pub fn new(start_line: LineNumber, line_count: LineNumber, cohort: CommitKey) -> Self {
         Self {
             start_line,
             line_count,
@@ -42,14 +66,14 @@ impl<CohortKey: Keyable> BlameRange<CohortKey> {
 /// the interval to a "cohort" (any information you want to associate with the line).
 /// The end of each interval is implicit: the next key, or `total_lines` for the last one.
 #[derive(Debug, Clone)]
-pub struct FileBlame<CohortKey: Keyable> {
-    change_points: BTreeMap<LineNumber, CohortKey>,
+pub struct FileBlame<CommitKey: Keyable> {
+    change_points: BTreeMap<LineNumber, CommitKey>,
     total_lines: LineNumber,
-    cohort_stats: std::collections::HashMap<CohortKey, u64>,
+    cohort_stats: std::collections::HashMap<CommitKey, u64>,
 }
 
-impl<CohortKey: Keyable> FileBlame<CohortKey> {
-    pub fn new(total_lines: LineNumber, cohort: CohortKey) -> Self {
+impl<CommitKey: Keyable> FileBlame<CommitKey> {
+    pub fn new(total_lines: LineNumber, cohort: CommitKey) -> Self {
         let mut change_points = BTreeMap::new();
         let mut cohort_stats = std::collections::HashMap::new();
         if total_lines > 0 {
@@ -71,7 +95,7 @@ impl<CohortKey: Keyable> FileBlame<CohortKey> {
         self.change_points.len()
     }
 
-    fn cohort_at_index(&self, index: LineNumber) -> Option<CohortKey> {
+    fn cohort_at_index(&self, index: LineNumber) -> Option<CommitKey> {
         if index >= self.total_lines {
             return None;
         }
@@ -85,7 +109,7 @@ impl<CohortKey: Keyable> FileBlame<CohortKey> {
         if self.change_points.is_empty() {
             return;
         }
-        let mut prev_value: Option<CohortKey> = None;
+        let mut prev_value: Option<CommitKey> = None;
         let mut keys_to_remove: Vec<LineNumber> = Vec::new();
         for (&k, &v) in self.change_points.iter() {
             if let Some(prev) = prev_value {
@@ -101,7 +125,7 @@ impl<CohortKey: Keyable> FileBlame<CohortKey> {
     }
 
     /// Get an iterator over ranges as (start_line, end_line, cohort)
-    pub fn ranges(&self) -> impl Iterator<Item = (LineNumber, LineNumber, CohortKey)> + '_ {
+    pub fn ranges(&self) -> impl Iterator<Item = (LineNumber, LineNumber, CommitKey)> + '_ {
         let mut iter = self.change_points.iter().peekable();
         std::iter::from_fn(move || {
             if let Some((&start, &cohort)) = iter.next() {
@@ -125,7 +149,7 @@ impl<CohortKey: Keyable> FileBlame<CohortKey> {
         })
     }
 
-    fn compute_cohort_stats(&self) -> std::collections::HashMap<CohortKey, u64> {
+    fn compute_cohort_stats(&self) -> std::collections::HashMap<CommitKey, u64> {
         let mut stats = std::collections::HashMap::new();
         for (start, end, cohort) in self.ranges() {
             *stats.entry(cohort).or_insert(0) += (end - start) as u64;
@@ -133,7 +157,7 @@ impl<CohortKey: Keyable> FileBlame<CohortKey> {
         stats
     }
 
-    pub fn cohort_stats(&self) -> std::collections::HashMap<CohortKey, u64> {
+    pub fn cohort_stats(&self) -> std::collections::HashMap<CommitKey, u64> {
         self.cohort_stats.clone()
     }
 
@@ -184,7 +208,7 @@ impl<CohortKey: Keyable> FileBlame<CohortKey> {
     // to track the delta we need to update the line numbers by.
     //
     // We have property tests against a reference implementation to validate correctness.
-    pub fn apply_line_diffs(&self, line_diffs: LineDiffs<CohortKey>) -> Self {
+    pub fn apply_line_diffs(&self, line_diffs: LineDiffs<CommitKey>) -> Self {
         if line_diffs.is_empty() {
             return self.clone();
         }
@@ -199,14 +223,14 @@ impl<CohortKey: Keyable> FileBlame<CohortKey> {
         // modifications as we copy. For example, to delete lines, we simply don't
         // copy the change points that lie within the delete range into the new blame.
         // As we copy change points into the new blame, we also apply the offset to the line numbers.
-        let mut new_change_points: BTreeMap<LineNumber, CohortKey> = BTreeMap::new();
+        let mut new_change_points: BTreeMap<LineNumber, CommitKey> = BTreeMap::new();
         let mut cp_iter = self.change_points.iter().peekable();
         let old_total = self.total_lines;
         let mut offset: LineDelta = 0;
 
         // Helper to append a change point to the new blame only if it's different than the current last one
         let push_cp =
-            |pos: LineNumber, cohort: CohortKey, map: &mut BTreeMap<LineNumber, CohortKey>| {
+            |pos: LineNumber, cohort: CommitKey, map: &mut BTreeMap<LineNumber, CommitKey>| {
                 if let Some((_, &last_cohort)) = map.last_key_value() {
                     if last_cohort == cohort {
                         return;
@@ -400,12 +424,12 @@ mod tests {
     // So 3 lines of 2022 -> [2022, 2022, 2022]. Deleting 2 lines at pos X means
     // literally going to pos X and removing 2 items. No fancy bookkeeping.
     #[derive(Clone, Debug)]
-    struct NaiveBlame<CohortKey: Keyable> {
-        lines: Vec<CohortKey>,
+    struct NaiveBlame<CommitKey: Keyable> {
+        lines: Vec<CommitKey>,
     }
 
-    impl<CohortKey: Keyable> NaiveBlame<CohortKey> {
-        fn new(total_lines: LineNumber, cohort: CohortKey) -> Self {
+    impl<CommitKey: Keyable> NaiveBlame<CommitKey> {
+        fn new(total_lines: LineNumber, cohort: CommitKey) -> Self {
             Self {
                 lines: vec![cohort; total_lines as usize],
             }
@@ -435,7 +459,7 @@ mod tests {
             mut line_diffs: Vec<(
                 std::ops::Range<LineNumber>,
                 std::ops::Range<LineNumber>,
-                CohortKey,
+                CommitKey,
             )>,
         ) {
             // Apply from bottom to top so indices of earlier hunks are unaffected
@@ -462,10 +486,10 @@ mod tests {
             }
         }
 
-        fn expand(&self) -> Vec<CohortKey> {
+        fn expand(&self) -> Vec<CommitKey> {
             self.lines.clone()
         }
-        fn cohort_stats(&self) -> std::collections::HashMap<CohortKey, u64> {
+        fn cohort_stats(&self) -> std::collections::HashMap<CommitKey, u64> {
             let mut stats = std::collections::HashMap::new();
             for &cohort in self.lines.iter() {
                 *stats.entry(cohort).or_insert(0) += 1;
