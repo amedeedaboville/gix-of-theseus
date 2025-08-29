@@ -25,7 +25,7 @@ where
 {
     pub commit_id: gix::ObjectId,
     pub file_blames: DashMap<BString, FileBlame<CommitKey>>,
-    pub running_cohort_stats: DashMap<CommitKey, u64>,
+    pub running_cohort_stats: DashMap<CommitKey, i64>,
 }
 
 impl<CommitKey> RepositoryBlameSnapshot<CommitKey>
@@ -45,8 +45,8 @@ where
         self.file_blames.insert(path.clone(), file_blame);
         self.running_cohort_stats
             .entry(cohort)
-            .and_modify(|v| *v += total_lines as u64)
-            .or_insert(total_lines as u64);
+            .and_modify(|v| *v += total_lines as i64)
+            .or_insert(total_lines as i64);
     }
 
     fn delete_file(&self, path: &BString) {
@@ -54,7 +54,7 @@ where
             for (cohort, line_count) in file_blame.cohort_stats() {
                 self.running_cohort_stats
                     .entry(cohort)
-                    .and_modify(|v| *v -= line_count);
+                    .and_modify(|v| *v -= line_count as i64);
             }
         }
     }
@@ -69,28 +69,28 @@ where
     }
 
     pub fn modify_file(&self, path: &BString, line_diffs: LineDiffs<CommitKey>) {
-        self.file_blames
-            .view(path, |_key, old_blame| {
-                let new_blame = old_blame.apply_line_diffs(line_diffs);
-                let mut cohort_diff: HashMap<CommitKey, i64> = HashMap::new();
-                for (cohort, line_count) in old_blame.cohort_stats() {
-                    *cohort_diff.entry(cohort).or_insert(0) -= line_count as i64;
-                }
-                for (cohort, line_count) in new_blame.cohort_stats() {
-                    *cohort_diff.entry(cohort).or_insert(0) += line_count as i64;
-                }
+        if let Some(mut file_blame) = self.file_blames.get_mut(path) {
+            let old_blame = file_blame.clone();
+            let new_blame = old_blame.apply_line_diffs(line_diffs.clone());
+            let mut cohort_diff: std::collections::HashMap<CommitKey, i64> =
+                std::collections::HashMap::new();
+            for (cohort, line_count) in old_blame.cohort_stats() {
+                *cohort_diff.entry(cohort).or_insert(0) -= line_count as i64;
+            }
+            for (cohort, line_count) in new_blame.cohort_stats() {
+                *cohort_diff.entry(cohort).or_insert(0) += line_count as i64;
+            }
 
-                for (cohort, delta) in cohort_diff {
-                    self.running_cohort_stats
-                        .entry(cohort)
-                        .and_modify(|v| *v = (*v as i64 + delta) as u64)
-                        .or_insert(delta as u64);
-                }
-                new_blame
-            })
-            .unwrap();
+            for (cohort, delta) in cohort_diff {
+                self.running_cohort_stats
+                    .entry(cohort)
+                    .and_modify(|v| *v += delta)
+                    .or_insert(delta);
+            }
+            *file_blame = new_blame;
+        }
     }
-    pub fn repository_cohort_stats(&self) -> Vec<(CommitKey, u64)>
+    pub fn repository_cohort_stats(&self) -> Vec<(CommitKey, i64)>
     where
         CommitKey: Keyable,
     {
@@ -110,7 +110,7 @@ pub struct TheseusResult {
     //One entry per commit, with metadata about it and which cohort it belongs to
     pub commit_cohort_info: Vec<CommitCohortInfo>,
     // One entry per commit, with the child vec being key,value pairs of commit key + number of lines
-    pub cohort_data: Vec<Vec<(usize, u64)>>,
+    pub cohort_data: Vec<Vec<(usize, i64)>>,
 }
 pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error::Error>> {
     let repo = gix::open(repo_path)?;
