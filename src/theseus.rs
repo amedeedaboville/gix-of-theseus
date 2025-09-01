@@ -1,6 +1,5 @@
 use crate::blame::{FileBlame, Keyable, LineDiffs, LineNumber};
-use crate::collectors::list_in_range::Granularity;
-use crate::collectors::list_in_range::list_commits_with_granularity;
+use crate::collectors::list_in_range::{list_commits_with_granularity, Granularity};
 use anyhow::Result;
 use dashmap::DashMap;
 use gix::bstr::{BString, ByteSlice};
@@ -12,7 +11,6 @@ use gix::diff::tree_with_rewrites::{Action, Change, ChangeRef};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use thread_local::ThreadLocal;
 
 /// Represents blame information for the entire repository at a specific commit
@@ -104,7 +102,6 @@ pub struct CommitCohortInfo {
     pub id: gix::ObjectId,
     pub time_string: String,
     pub year: u32,
-    pub cohort: usize,
 }
 pub struct TheseusResult {
     //One entry per commit, with metadata about it and which cohort it belongs to
@@ -150,12 +147,10 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
             .collect();
     let commit_infos = commit_trees_and_years
         .iter()
-        .enumerate()
-        .map(|(i, (id, _time, ts, _, year))| CommitCohortInfo {
+        .map(|(id, _time, ts, _, year)| CommitCohortInfo {
             id: id.clone(),
             time_string: ts.clone(),
             year: *year,
-            cohort: i,
         })
         .collect();
     let commit_changes_and_cohorts: Vec<(Vec<Change>, usize)> = (0..commit_trees_and_years.len())
@@ -279,10 +274,43 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                         Change::Rewrite {
                             source_location,
                             location,
+                            diff,
+                            id,
+                            source_id,
                             ..
                         } => {
                             let _ = current_snapshot
                                 .rename_file(source_location.clone(), location.clone());
+
+                            if diff.is_some() {
+                                let (thread_repo, platform_cell) = get_thread_local_vars();
+                                let mut platform_borrow = platform_cell.borrow_mut();
+                                platform_borrow.set_resource(
+                                    source_id,
+                                    gix::object::tree::EntryKind::Blob,
+                                    location.as_ref(),
+                                    gix::diff::blob::ResourceKind::OldOrSource,
+                                    &thread_repo.objects,
+                                )?;
+                                platform_borrow.set_resource(
+                                    id,
+                                    gix::object::tree::EntryKind::Blob,
+                                    location.as_ref(),
+                                    gix::diff::blob::ResourceKind::NewOrDestination,
+                                    &thread_repo.objects,
+                                )?;
+                                let outcome = platform_borrow.prepare_diff()?;
+                                let input = outcome.interned_input();
+                                let mut line_diffs = Vec::new();
+                                blob_diff(
+                                    gix::diff::blob::Algorithm::Myers,
+                                    &input,
+                                    |before: std::ops::Range<u32>, after: std::ops::Range<u32>| {
+                                        line_diffs.push((before, after, cohort));
+                                    },
+                                );
+                                current_snapshot.modify_file(&location, line_diffs);
+                            }
                         }
                     };
                     return Ok(());

@@ -1,10 +1,7 @@
-use std::{
-    collections::BTreeMap,
-    fmt::{Debug, Display},
-    hash::Hash,
-};
+use std::{collections::BTreeMap, fmt::Debug};
 
 // Has to be u32 bc gix returns Ranges of u32s in its diff output
+// 4B lines oughta be enough for anybody
 pub type LineNumber = u32;
 pub type LineDelta = i64;
 pub type LineDiffs<CommitKey> = Vec<(
