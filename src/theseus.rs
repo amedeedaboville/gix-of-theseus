@@ -12,6 +12,9 @@ use rayon::prelude::*;
 use std::cell::RefCell;
 use thread_local::ThreadLocal;
 
+// Information about a commit that we use to make the graphs.
+// For now we only care about the year, though the time_string could
+// be used to plot weeks.
 pub struct CommitCohortInfo {
     pub id: gix::ObjectId,
     pub time_string: String,
@@ -28,7 +31,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
     let repo = gix::open(repo_path)?;
     let safe_repo = repo.clone().into_sync();
     let weekly_commits = list_commits_with_granularity(&repo, Granularity::Weekly, None, None)?;
-    let current_snapshot = RepositoryBlameSnapshot::<usize>::new(weekly_commits[0].id);
+    let mut current_snapshot = RepositoryBlameSnapshot::<usize>::new(weekly_commits[0].id);
 
     //Each thread gets its own repo handle and its own diff cache
     let tl = ThreadLocal::new();
@@ -101,6 +104,9 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
 
     let mut results = Vec::new();
     for (work_todo, commit_idx) in progress_bar.wrap_iter(commit_changes_and_cohorts.into_iter()) {
+        current_snapshot.set_commit_id(commit_trees_and_years[commit_idx].0.clone());
+
+        // For any one commit, we process the changes that commit makes to the tree in parallel:
         work_todo
             .into_par_iter()
             .map(

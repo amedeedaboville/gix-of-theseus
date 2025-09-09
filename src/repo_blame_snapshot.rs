@@ -29,6 +29,9 @@ where
             running_cohort_stats: DashMap::new(),
         }
     }
+    pub fn set_commit_id(&mut self, commit_id: gix::ObjectId) {
+        self.commit_id = commit_id;
+    }
 
     pub fn add_file(&self, path: &BString, total_lines: LineNumber, cohort: CommitKey) {
         let file_blame = FileBlame::new(total_lines, cohort);
