@@ -1,10 +1,9 @@
-use crate::blame::{FileBlame, Keyable, LineDiffs, LineNumber};
-use crate::collectors::list_in_range::{list_commits_with_granularity, Granularity};
+use crate::blame::LineNumber;
+use crate::repo_blame_snapshot::RepositoryBlameSnapshot;
+use crate::gix_helpers::{get_blob_diff, list_commits_with_granularity, Granularity};
 use anyhow::Result;
-use dashmap::DashMap;
-use gix::bstr::{BString, ByteSlice};
+use gix::bstr::ByteSlice;
 use gix::date::time::CustomFormat;
-use gix::diff::blob::diff as blob_diff;
 use gix::diff::object::TreeRefIter;
 use gix::diff::tree_with_rewrites;
 use gix::diff::tree_with_rewrites::{Action, Change, ChangeRef};
@@ -13,91 +12,6 @@ use rayon::prelude::*;
 use std::cell::RefCell;
 use thread_local::ThreadLocal;
 
-/// Represents blame information for the entire repository at a specific commit
-/// Uses Dashmap so we can update entries concurrently for a slight boost
-/// A CommitKey is a usize that is essentially a pointer into an array of commit info
-#[derive(Debug, Clone)]
-pub struct RepositoryBlameSnapshot<CommitKey>
-where
-    CommitKey: Keyable,
-{
-    pub commit_id: gix::ObjectId,
-    pub file_blames: DashMap<BString, FileBlame<CommitKey>>,
-    pub running_cohort_stats: DashMap<CommitKey, i64>,
-}
-
-impl<CommitKey> RepositoryBlameSnapshot<CommitKey>
-where
-    CommitKey: Keyable,
-{
-    pub fn new(commit_id: gix::ObjectId) -> Self {
-        Self {
-            commit_id,
-            file_blames: DashMap::new(),
-            running_cohort_stats: DashMap::new(),
-        }
-    }
-
-    fn add_file(&self, path: &BString, total_lines: LineNumber, cohort: CommitKey) {
-        let file_blame = FileBlame::new(total_lines, cohort);
-        self.file_blames.insert(path.clone(), file_blame);
-        self.running_cohort_stats
-            .entry(cohort)
-            .and_modify(|v| *v += total_lines as i64)
-            .or_insert(total_lines as i64);
-    }
-
-    fn delete_file(&self, path: &BString) {
-        if let Some((_, file_blame)) = self.file_blames.remove(path) {
-            for (cohort, line_count) in file_blame.cohort_stats() {
-                self.running_cohort_stats
-                    .entry(cohort)
-                    .and_modify(|v| *v -= line_count as i64);
-            }
-        }
-    }
-
-    fn rename_file(&self, old_path: BString, new_path: BString) -> Result<(), String> {
-        let (_old_path, file_blame) = self
-            .file_blames
-            .remove(&old_path)
-            .ok_or_else(|| format!("File not found for rename: {:?}", old_path))?;
-        self.file_blames.insert(new_path.clone(), file_blame);
-        Ok(())
-    }
-
-    pub fn modify_file(&self, path: &BString, line_diffs: LineDiffs<CommitKey>) {
-        if let Some(mut file_blame) = self.file_blames.get_mut(path) {
-            let old_blame = file_blame.clone();
-            let new_blame = old_blame.apply_line_diffs(line_diffs.clone());
-            let mut cohort_diff: std::collections::HashMap<CommitKey, i64> =
-                std::collections::HashMap::new();
-            for (cohort, line_count) in old_blame.cohort_stats() {
-                *cohort_diff.entry(cohort).or_insert(0) -= line_count as i64;
-            }
-            for (cohort, line_count) in new_blame.cohort_stats() {
-                *cohort_diff.entry(cohort).or_insert(0) += line_count as i64;
-            }
-
-            for (cohort, delta) in cohort_diff {
-                self.running_cohort_stats
-                    .entry(cohort)
-                    .and_modify(|v| *v += delta)
-                    .or_insert(delta);
-            }
-            *file_blame = new_blame;
-        }
-    }
-    pub fn repository_cohort_stats(&self) -> Vec<(CommitKey, i64)>
-    where
-        CommitKey: Keyable,
-    {
-        self.running_cohort_stats
-            .iter()
-            .map(|ref_multi| (*ref_multi.key(), *ref_multi.value()))
-            .collect()
-    }
-}
 pub struct CommitCohortInfo {
     pub id: gix::ObjectId,
     pub time_string: String,
@@ -106,9 +20,10 @@ pub struct CommitCohortInfo {
 pub struct TheseusResult {
     //One entry per commit, with metadata about it and which cohort it belongs to
     pub commit_cohort_info: Vec<CommitCohortInfo>,
-    // One entry per commit, with the child vec being key,value pairs of commit key + number of lines
+    // One entry per commit, with the child vec being key,value pairs of commit idx + number of lines
     pub cohort_data: Vec<Vec<(usize, i64)>>,
 }
+
 pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error::Error>> {
     let repo = gix::open(repo_path)?;
     let safe_repo = repo.clone().into_sync();
@@ -145,14 +60,6 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                 )
             })
             .collect();
-    let commit_infos = commit_trees_and_years
-        .iter()
-        .map(|(id, _time, ts, _, year)| CommitCohortInfo {
-            id: id.clone(),
-            time_string: ts.clone(),
-            year: *year,
-        })
-        .collect();
     let commit_changes_and_cohorts: Vec<(Vec<Change>, usize)> = (0..commit_trees_and_years.len())
         .into_par_iter()
         .map(|i| {
@@ -193,7 +100,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
         .collect();
 
     let mut results = Vec::new();
-    for (work_todo, cohort) in progress_bar.wrap_iter(commit_changes_and_cohorts.into_iter()) {
+    for (work_todo, commit_idx) in progress_bar.wrap_iter(commit_changes_and_cohorts.into_iter()) {
         work_todo
             .into_par_iter()
             .map(
@@ -203,12 +110,10 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                     match change {
                         Change::Addition { location, id, .. } => {
                             let blob = thread_repo.find_blob(id)?;
-                            let content = &blob.data;
-                            let num_lines = content.lines().count();
                             current_snapshot.add_file(
-                                &location.clone(),
-                                num_lines as LineNumber,
-                                cohort,
+                                &location,
+                                blob.data.lines().count() as LineNumber,
+                                commit_idx,
                             );
                         }
                         Change::Deletion { location, .. } => {
@@ -231,7 +136,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                                     // Treat as adding file
                                     let new_blob = thread_repo.find_blob(id)?;
                                     let new_lines = new_blob.data.lines().count() as LineNumber;
-                                    current_snapshot.add_file(&location, new_lines, cohort);
+                                    current_snapshot.add_file(&location, new_lines, commit_idx);
                                     return Ok(());
                                 } else if prev_is_blob && !new_is_blob {
                                     current_snapshot.delete_file(&location);
@@ -244,33 +149,16 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                                 }
                             }
 
-                            platform_borrow.set_resource(
-                                previous_id,
-                                gix::object::tree::EntryKind::Blob,
-                                location.as_ref(),
-                                gix::diff::blob::ResourceKind::OldOrSource,
-                                &thread_repo.objects,
-                            )?;
-                            platform_borrow.set_resource(
-                                id,
-                                gix::object::tree::EntryKind::Blob,
-                                location.as_ref(),
-                                gix::diff::blob::ResourceKind::NewOrDestination,
-                                &thread_repo.objects,
-                            )?;
-
-                            let outcome = platform_borrow.prepare_diff()?;
-                            let input = outcome.interned_input();
-                            let mut line_diffs = Vec::new();
-                            blob_diff(
-                                gix::diff::blob::Algorithm::Myers,
-                                &input,
-                                |before: std::ops::Range<u32>, after: std::ops::Range<u32>| {
-                                    line_diffs.push((before, after, cohort));
-                                },
-                            );
-                            current_snapshot.modify_file(&location, line_diffs);
-                        }
+                        let line_diffs = get_blob_diff(
+                            &mut platform_borrow,
+                            previous_id,
+                            id,
+                            location.as_ref(),
+                            &thread_repo.objects,
+                            commit_idx,
+                        )?;
+                        current_snapshot.modify_file(&location, line_diffs);
+                    }
                         Change::Rewrite {
                             source_location,
                             location,
@@ -285,30 +173,14 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             if diff.is_some() {
                                 let (thread_repo, platform_cell) = get_thread_local_vars();
                                 let mut platform_borrow = platform_cell.borrow_mut();
-                                platform_borrow.set_resource(
+                                let line_diffs = get_blob_diff(
+                                    &mut platform_borrow,
                                     source_id,
-                                    gix::object::tree::EntryKind::Blob,
-                                    location.as_ref(),
-                                    gix::diff::blob::ResourceKind::OldOrSource,
-                                    &thread_repo.objects,
-                                )?;
-                                platform_borrow.set_resource(
                                     id,
-                                    gix::object::tree::EntryKind::Blob,
                                     location.as_ref(),
-                                    gix::diff::blob::ResourceKind::NewOrDestination,
                                     &thread_repo.objects,
+                                    commit_idx,
                                 )?;
-                                let outcome = platform_borrow.prepare_diff()?;
-                                let input = outcome.interned_input();
-                                let mut line_diffs = Vec::new();
-                                blob_diff(
-                                    gix::diff::blob::Algorithm::Myers,
-                                    &input,
-                                    |before: std::ops::Range<u32>, after: std::ops::Range<u32>| {
-                                        line_diffs.push((before, after, cohort));
-                                    },
-                                );
                                 current_snapshot.modify_file(&location, line_diffs);
                             }
                         }
@@ -319,8 +191,8 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
             .for_each(|v| v.unwrap());
 
         // We need to clear the diff cache every so often.
-        // Clearing it every 2, 10, 100 or 200 commits has nearly the same performance improvement,
-        // a bit less than 10s, but consumes 60+ GB of RAM compared to capping out at 200MB
+        // Clearing it every 2, 10, 100 or 200 commits has nearly the same performance improvement:
+        // a speedup of ~10s on torvalds/linux, but it consumes 60+ GB of RAM compared to capping out at 200MB
         // when clearing every commit. Clearing it less often than every commit is not worth it.
         rayon::broadcast(|_| {
             let (_, platform_cell) = get_thread_local_vars();
@@ -331,6 +203,14 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
         results.push(current_snapshot.repository_cohort_stats());
     }
 
+    let commit_infos = commit_trees_and_years
+        .iter()
+        .map(|(id, _time, ts, _, year)| CommitCohortInfo {
+            id: id.clone(),
+            time_string: ts.clone(),
+            year: *year,
+        })
+        .collect();
     Ok(TheseusResult {
         commit_cohort_info: commit_infos,
         cohort_data: results,
