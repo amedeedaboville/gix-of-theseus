@@ -1,12 +1,13 @@
+use crate::actions::Action;
 use crate::blame::LineNumber;
-use crate::repo_blame_snapshot::RepositoryBlameSnapshot;
-use crate::gix_helpers::{get_blob_diff, list_commits_with_granularity, Granularity};
+use crate::gix_helpers::{Granularity, get_blob_diff, list_commits_with_granularity};
+use crate::repo_blame_snapshot::BlameProcessor;
 use anyhow::Result;
 use gix::bstr::ByteSlice;
 use gix::date::time::CustomFormat;
 use gix::diff::object::TreeRefIter;
 use gix::diff::tree_with_rewrites;
-use gix::diff::tree_with_rewrites::{Action, Change, ChangeRef};
+use gix::diff::tree_with_rewrites::{Action as DiffAction, Change, ChangeRef};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::cell::RefCell;
@@ -31,7 +32,8 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
     let repo = gix::open(repo_path)?;
     let safe_repo = repo.clone().into_sync();
     let weekly_commits = list_commits_with_granularity(&repo, Granularity::Weekly, None, None)?;
-    let mut current_snapshot = RepositoryBlameSnapshot::<usize>::new(weekly_commits[0].id);
+    let processor = BlameProcessor::<usize>::new(weekly_commits[0].id);
+    let sender = processor.sender();
 
     //Each thread gets its own repo handle and its own diff cache
     let tl = ThreadLocal::new();
@@ -42,8 +44,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
             (repo, platform)
         })
     };
-    let progress_bar = ProgressBar::new(weekly_commits.len() as u64);
-    progress_bar.set_style(
+    let progress_bar = ProgressBar::new(weekly_commits.len() as u64).with_style(
         ProgressStyle::default_bar()
             .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta_precise}) {per_sec:0.1} {msg}")
             .unwrap()
@@ -63,12 +64,14 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                 )
             })
             .collect();
+    // First we comput the tree-diffs between each weekly commit and the previous one.
+    // We can actually do this in parallel, which is nice.
     let commit_changes_and_cohorts: Vec<(Vec<Change>, usize)> = (0..commit_trees_and_years.len())
         .into_par_iter()
         .map(|i| {
             let (repo, platform_cell) = get_thread_local_vars();
             let mut platform = platform_cell.borrow_mut();
-    
+
             let mut tree_diff_state = gix::diff::tree::State::default();
             let mut objects = &repo.objects;
 
@@ -86,11 +89,11 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                 &mut platform,
                 &mut tree_diff_state,
                 &mut objects,
-                |change: ChangeRef<'_>| -> Result<Action, Box<dyn std::error::Error + Send + Sync>> {
+                |change: ChangeRef<'_>| -> Result<DiffAction, Box<dyn std::error::Error + Send + Sync>> {
                     if change.entry_mode().is_blob() {
                         work_todo.push(change.into_owned());
                     }
-                    Ok(Action::Continue)
+                    Ok(DiffAction::Continue)
                 },
                 gix::diff::tree_with_rewrites::Options {
                     location: Some(gix::diff::tree::recorder::Location::Path),
@@ -102,28 +105,34 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
         })
         .collect();
 
-    let mut results = Vec::new();
+    // Now work_todo is a vec of changes per commit that we need to accumulate to build our incremental blame.
+    // We go through it serially, but we can process each commit's changes in parallel.
     for (work_todo, commit_idx) in progress_bar.wrap_iter(commit_changes_and_cohorts.into_iter()) {
-        current_snapshot.set_commit_id(commit_trees_and_years[commit_idx].0.clone());
+        sender
+            .send(Action::SetCommitId(
+                commit_trees_and_years[commit_idx].0.clone(),
+            ))
+            .unwrap();
 
         // For any one commit, we process the changes that commit makes to the tree in parallel:
         work_todo
             .into_par_iter()
             .map(
                 |change| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-                    let (thread_repo, _) = get_thread_local_vars();
-
+                    let (thread_repo, platform_cell) = get_thread_local_vars();
                     match change {
                         Change::Addition { location, id, .. } => {
                             let blob = thread_repo.find_blob(id)?;
-                            current_snapshot.add_file(
-                                &location,
-                                blob.data.lines().count() as LineNumber,
-                                commit_idx,
-                            );
+                            sender
+                                .send(Action::AddFile {
+                                    path: location,
+                                    total_lines: blob.data.lines().count() as LineNumber,
+                                    cohort: commit_idx,
+                                })
+                                .unwrap();
                         }
                         Change::Deletion { location, .. } => {
-                            current_snapshot.delete_file(&location);
+                            sender.send(Action::DeleteFile { path: location }).unwrap();
                         }
                         Change::Modification {
                             location,
@@ -132,9 +141,6 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             entry_mode,
                             id,
                         } => {
-                            let (thread_repo, platform_cell) = get_thread_local_vars();
-                            let mut platform_borrow = platform_cell.borrow_mut();
-
                             if previous_entry_mode != entry_mode {
                                 let prev_is_blob = previous_entry_mode.is_blob();
                                 let new_is_blob = entry_mode.is_blob();
@@ -142,10 +148,16 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                                     // Treat as adding file
                                     let new_blob = thread_repo.find_blob(id)?;
                                     let new_lines = new_blob.data.lines().count() as LineNumber;
-                                    current_snapshot.add_file(&location, new_lines, commit_idx);
+                                    sender
+                                        .send(Action::AddFile {
+                                            path: location,
+                                            total_lines: new_lines,
+                                            cohort: commit_idx,
+                                        })
+                                        .unwrap();
                                     return Ok(());
                                 } else if prev_is_blob && !new_is_blob {
-                                    current_snapshot.delete_file(&location);
+                                    sender.send(Action::DeleteFile { path: location }).unwrap();
                                     return Ok(());
                                 } else {
                                     // Non-blob → non-blob: ignore
@@ -155,16 +167,22 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                                 }
                             }
 
-                        let line_diffs = get_blob_diff(
-                            &mut platform_borrow,
-                            previous_id,
-                            id,
-                            location.as_ref(),
-                            &thread_repo.objects,
-                            commit_idx,
-                        )?;
-                        current_snapshot.modify_file(&location, line_diffs);
-                    }
+                            let mut platform_borrow = platform_cell.borrow_mut();
+                            let line_diffs = get_blob_diff(
+                                &mut platform_borrow,
+                                previous_id,
+                                id,
+                                location.as_ref(),
+                                &thread_repo.objects,
+                                commit_idx,
+                            )?;
+                            sender
+                                .send(Action::ModifyFile {
+                                    path: location,
+                                    line_diffs,
+                                })
+                                .unwrap();
+                        }
                         Change::Rewrite {
                             source_location,
                             location,
@@ -173,12 +191,19 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             source_id,
                             ..
                         } => {
-                            let _ = current_snapshot
-                                .rename_file(source_location.clone(), location.clone());
+                            sender
+                                .send(Action::RenameFile {
+                                    old_path: source_location,
+                                    new_path: location.clone(),
+                                })
+                                .unwrap();
 
                             if diff.is_some() {
                                 let (thread_repo, platform_cell) = get_thread_local_vars();
-                                let mut platform_borrow = platform_cell.borrow_mut();
+                                let mut platform_borrow: std::cell::RefMut<
+                                    '_,
+                                    gix::diff::blob::Platform,
+                                > = platform_cell.borrow_mut();
                                 let line_diffs = get_blob_diff(
                                     &mut platform_borrow,
                                     source_id,
@@ -187,7 +212,12 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                                     &thread_repo.objects,
                                     commit_idx,
                                 )?;
-                                current_snapshot.modify_file(&location, line_diffs);
+                                sender
+                                    .send(Action::ModifyFile {
+                                        path: location,
+                                        line_diffs,
+                                    })
+                                    .unwrap();
                             }
                         }
                     };
@@ -206,8 +236,10 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                 .borrow_mut()
                 .clear_resource_cache_keep_allocation();
         });
-        results.push(current_snapshot.repository_cohort_stats());
+        sender.send(Action::FinishCommit).unwrap();
     }
+    drop(sender);
+    let results = processor.finish();
 
     let commit_infos = commit_trees_and_years
         .iter()

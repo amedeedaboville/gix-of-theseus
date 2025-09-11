@@ -23,6 +23,7 @@ dashmap = {version = "6.1.0", features=["inline", "rayon"]}
 thread_local = "1.1"
 anyhow = "1.0.99"
 serde_json = "1.0.143"
+crossbeam-channel = "0.5"
 
 [dev-dependencies]
 proptest = "1"
