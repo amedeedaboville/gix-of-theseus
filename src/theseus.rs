@@ -22,7 +22,8 @@ pub struct CommitCohortInfo {
     pub year: u32,
 }
 pub struct TheseusResult {
-    //One entry per commit, with metadata about it and which cohort it belongs to
+    //A table listing metadata for each commit
+    //Mentions to "commit_idx" elsewhere refer to the index in this Vec
     pub commit_cohort_info: Vec<CommitCohortInfo>,
     // One entry per commit, with the child vec being key,value pairs of commit idx + number of lines
     pub cohort_data: Vec<Vec<(usize, i64)>>,
@@ -50,21 +51,19 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
             .unwrap()
             .progress_chars("=>-"),
     );
-    let commit_trees_and_years: Vec<(gix::ObjectId, gix::date::Time, String, Vec<u8>, u32)> =
-        weekly_commits
-            .into_iter()
-            .map(|commit| {
-                let time = commit.time().unwrap();
-                (
-                    commit.id().to_owned().into(),
-                    time,
-                    time.format(CustomFormat::new("%Y-%m-%d %H:%M:%S")),
-                    commit.tree().unwrap().detach().data,
-                    time.format(CustomFormat::new("%Y")).parse().unwrap(),
-                )
-            })
-            .collect();
-    // First we comput the tree-diffs between each weekly commit and the previous one.
+    let commit_trees_and_years: Vec<(gix::ObjectId, String, Vec<u8>, u32)> = weekly_commits
+        .into_iter()
+        .map(|commit| {
+            let time = commit.time().unwrap();
+            (
+                commit.id().to_owned().into(),
+                time.format(CustomFormat::new("%Y-%m-%d %H:%M:%S")),
+                commit.tree().unwrap().detach().data,
+                time.format(CustomFormat::new("%Y")).parse().unwrap(),
+            )
+        })
+        .collect();
+    // First we compute the tree-diffs between each weekly commit and its preceding commit.
     // We can actually do this in parallel, which is nice.
     let commit_changes_and_cohorts: Vec<(Vec<Change>, usize)> = (0..commit_trees_and_years.len())
         .into_par_iter()
@@ -75,9 +74,9 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
             let mut tree_diff_state = gix::diff::tree::State::default();
             let mut objects = &repo.objects;
 
-            let (_id, _time, _ts, current_tree_data, _year) = &commit_trees_and_years[i];
+            let (_id, _ts, current_tree_data, _year) = &commit_trees_and_years[i];
             let previous_tree_data = if i > 0 {
-                commit_trees_and_years[i - 1].3.as_slice()
+                commit_trees_and_years[i - 1].2.as_slice()
             } else {
                 &[]
             };
@@ -90,7 +89,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                 &mut tree_diff_state,
                 &mut objects,
                 |change: ChangeRef<'_>| -> Result<DiffAction, Box<dyn std::error::Error + Send + Sync>> {
-                    if change.entry_mode().is_blob() {
+                    if change.entry_mode().is_blob() || change.source_entry_mode_and_id().0.is_blob() {
                         work_todo.push(change.into_owned());
                     }
                     Ok(DiffAction::Continue)
@@ -117,22 +116,15 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
         // For any one commit, we process the changes that commit makes to the tree in parallel:
         work_todo
             .into_par_iter()
-            .map(
+            .try_for_each(
                 |change| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let (thread_repo, platform_cell) = get_thread_local_vars();
                     match change {
                         Change::Addition { location, id, .. } => {
-                            let blob = thread_repo.find_blob(id)?;
-                            sender
-                                .send(Action::AddFile {
-                                    path: location,
-                                    total_lines: blob.data.lines().count() as LineNumber,
-                                    cohort: commit_idx,
-                                })
-                                .unwrap();
+                            handle_file_addition(&sender, thread_repo, id, &location, commit_idx)?;
                         }
                         Change::Deletion { location, .. } => {
-                            sender.send(Action::DeleteFile { path: location }).unwrap();
+                            handle_file_deletion(&sender, location)?;
                         }
                         Change::Modification {
                             location,
@@ -141,47 +133,26 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             entry_mode,
                             id,
                         } => {
-                            if previous_entry_mode != entry_mode {
-                                let prev_is_blob = previous_entry_mode.is_blob();
-                                let new_is_blob = entry_mode.is_blob();
-                                if !prev_is_blob && new_is_blob {
-                                    // Treat as adding file
-                                    let new_blob = thread_repo.find_blob(id)?;
-                                    let new_lines = new_blob.data.lines().count() as LineNumber;
-                                    sender
-                                        .send(Action::AddFile {
-                                            path: location,
-                                            total_lines: new_lines,
-                                            cohort: commit_idx,
-                                        })
-                                        .unwrap();
-                                    return Ok(());
-                                } else if prev_is_blob && !new_is_blob {
-                                    sender.send(Action::DeleteFile { path: location }).unwrap();
-                                    return Ok(());
-                                } else {
-                                    // Non-blob → non-blob: ignore
-                                    if !prev_is_blob && !new_is_blob {
-                                        return Ok(());
-                                    }
-                                }
+                            if handle_entry_mode_change(
+                                &sender,
+                                thread_repo,
+                                previous_entry_mode,
+                                entry_mode,
+                                id,
+                                &location,
+                                commit_idx,
+                            )? {
+                                return Ok(());
                             }
-
-                            let mut platform_borrow = platform_cell.borrow_mut();
-                            let line_diffs = get_blob_diff(
-                                &mut platform_borrow,
+                            handle_file_modification(
+                                &sender,
+                                thread_repo,
+                                platform_cell,
                                 previous_id,
                                 id,
-                                location.as_ref(),
-                                &thread_repo.objects,
+                                &location,
                                 commit_idx,
                             )?;
-                            sender
-                                .send(Action::ModifyFile {
-                                    path: location,
-                                    line_diffs,
-                                })
-                                .unwrap();
                         }
                         Change::Rewrite {
                             source_location,
@@ -189,6 +160,8 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             diff,
                             id,
                             source_id,
+                            entry_mode,
+                            source_entry_mode,
                             ..
                         } => {
                             sender
@@ -197,35 +170,35 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                                     new_path: location.clone(),
                                 })
                                 .unwrap();
+                            if handle_entry_mode_change(
+                                &sender,
+                                thread_repo,
+                                source_entry_mode,
+                                entry_mode,
+                                id,
+                                &location,
+                                commit_idx,
+                            )? {
+                                return Ok(());
+                            }
 
                             if diff.is_some() {
-                                let (thread_repo, platform_cell) = get_thread_local_vars();
-                                let mut platform_borrow: std::cell::RefMut<
-                                    '_,
-                                    gix::diff::blob::Platform,
-                                > = platform_cell.borrow_mut();
-                                let line_diffs = get_blob_diff(
-                                    &mut platform_borrow,
+                                handle_file_modification(
+                                    &sender,
+                                    thread_repo,
+                                    platform_cell,
                                     source_id,
                                     id,
-                                    location.as_ref(),
-                                    &thread_repo.objects,
+                                    &location,
                                     commit_idx,
                                 )?;
-                                sender
-                                    .send(Action::ModifyFile {
-                                        path: location,
-                                        line_diffs,
-                                    })
-                                    .unwrap();
                             }
                         }
                     };
-                    return Ok(());
+                    Ok(())
                 },
             )
-            .for_each(|v| v.unwrap());
-
+            .unwrap();
         // We need to clear the diff cache every so often.
         // Clearing it every 2, 10, 100 or 200 commits has nearly the same performance improvement:
         // a speedup of ~10s on torvalds/linux, but it consumes 60+ GB of RAM compared to capping out at 200MB
@@ -243,7 +216,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
 
     let commit_infos = commit_trees_and_years
         .iter()
-        .map(|(id, _time, ts, _, year)| CommitCohortInfo {
+        .map(|(id, ts, _, year)| CommitCohortInfo {
             id: id.clone(),
             time_string: ts.clone(),
             year: *year,
@@ -253,4 +226,85 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
         commit_cohort_info: commit_infos,
         cohort_data: results,
     })
+}
+
+fn handle_file_modification(
+    sender: &crossbeam_channel::Sender<Action<usize>>,
+    thread_repo: &gix::Repository,
+    platform_cell: &std::cell::RefCell<gix::diff::blob::Platform>,
+    previous_id: gix::ObjectId,
+    id: gix::ObjectId,
+    location: &gix::bstr::BString,
+    commit_idx: usize,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut platform_borrow = platform_cell.borrow_mut();
+    let line_diffs = get_blob_diff(
+        &mut platform_borrow,
+        previous_id,
+        id,
+        location.as_ref(),
+        &thread_repo.objects,
+        commit_idx,
+    )?;
+    sender
+        .send(Action::ModifyFile {
+            path: location.clone(),
+            line_diffs,
+        })
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    Ok(())
+}
+
+fn handle_file_addition(
+    sender: &crossbeam_channel::Sender<Action<usize>>,
+    thread_repo: &gix::Repository,
+    id: gix::ObjectId,
+    location: &gix::bstr::BString,
+    commit_idx: usize,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let blob = thread_repo.find_blob(id)?;
+    sender
+        .send(Action::AddFile {
+            path: location.clone(),
+            total_lines: blob.data.lines().count() as LineNumber,
+            cohort: commit_idx,
+        })
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    Ok(())
+}
+
+fn handle_file_deletion(
+    sender: &crossbeam_channel::Sender<Action<usize>>,
+    location: gix::bstr::BString,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    sender
+        .send(Action::DeleteFile { path: location })
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    Ok(())
+}
+
+// Returns true if the entry mode change was handled and no more processing is needed
+fn handle_entry_mode_change(
+    sender: &crossbeam_channel::Sender<Action<usize>>,
+    thread_repo: &gix::Repository,
+    previous_entry_mode: gix::object::tree::EntryMode,
+    entry_mode: gix::object::tree::EntryMode,
+    id: gix::ObjectId,
+    location: &gix::bstr::BString,
+    commit_idx: usize,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    if previous_entry_mode != entry_mode {
+        let prev_is_blob = previous_entry_mode.is_blob();
+        let new_is_blob = entry_mode.is_blob();
+        if !prev_is_blob && new_is_blob {
+            handle_file_addition(sender, thread_repo, id, location, commit_idx)?;
+            return Ok(true);
+        } else if prev_is_blob && !new_is_blob {
+            handle_file_deletion(sender, location.clone())?;
+            return Ok(true);
+        } else if !prev_is_blob && !new_is_blob {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
