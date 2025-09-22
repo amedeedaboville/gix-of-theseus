@@ -20,7 +20,7 @@ For now, clone this repository and run `cargo build --release` to compile it. Th
 To get an image directly, (if you have `uv` installed):
 
 ```
-gix-of-theseus analyze --repo-path ~/repos/git/git --save-image git.png
+gix-of-theseus ~/repos/git/git --image-file git.png
 ```
 
 Will save its results to `${repo_name}.png`. Choose the output file's location with `--output-file`.
