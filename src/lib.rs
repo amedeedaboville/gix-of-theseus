@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod blame;
 pub mod collectors;
 pub mod formatter;

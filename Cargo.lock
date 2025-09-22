@@ -1014,6 +1014,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "crossbeam-channel",
  "dashmap",
  "gix",
  "indicatif",
