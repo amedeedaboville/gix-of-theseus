@@ -48,11 +48,12 @@ def generate_n_colors(n: int) -> list[tuple[float, float, float]]:
         colors.append(new_color)
     return colors
 
+
 def stack_plot(
     input_fn: str,
     display: bool = False,
     outfile: str = "stack_plot.png",
-    max_n: int = 20,
+    max_n: int = 40,
     normalize: bool = False,
 ) -> None:
     if not display:
@@ -99,7 +100,7 @@ def stack_plot_cmdline() -> None:
     )
     parser.add_argument(
         "--max-n",
-        default=20,
+        default=40,
         type=int,
         help='Max number of dataseries (will roll everything else into "other") (default: %(default)s)',
     )
