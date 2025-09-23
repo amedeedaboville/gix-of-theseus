@@ -7,6 +7,11 @@ Generates cohort analysis graphs of git repositories over time:
 
 It' fast because it uses a specialized algorithm (inspired from [hercules](https://github.com/src-d/hercules)) to implement its own "incremental" git blame, and because it's written in Rust, which gives it access to the wonderful [gitoxide](https://github.com/GitoxideLabs/gitoxide) and [rayon](https://docs.rs/rayon/latest/rayon/) crates.
 
+Here's git (6s to generate):
+![A stack plot of the composition of git's source code over the years](images/git.png)
+
+And the linux repo (~1 minute):
+![The same kind of graph but for linux](images/linux.png)
 ## Installation
 
 Installation will be with `cargo install gix-of-theseus` once I publish the package.
