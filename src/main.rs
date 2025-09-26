@@ -44,13 +44,12 @@ fn main() -> Result<()> {
         Subcommands::Theseus(args) => {
             let res = theseus::run_theseus(&args.repo_path).expect("Error running theseus");
             let formatted_data = formatter::format_cohort_data(res);
-            if let Some(image_file) = args.image_file {
-                let repo_last_part = args.repo_path.split('/').last().unwrap();
-                let temp_file = temp_dir().join(format!("{}.json", repo_last_part));
-                println!("Writing to {}", temp_file.display());
-                serde_json::to_writer_pretty(File::create(temp_file.clone())?, &formatted_data)?;
-                plot::run_stackplot(temp_file.display().to_string(), image_file)?;
-            }
+            let repo_last_part = args.repo_path.split('/').last().unwrap();
+            let temp_file = temp_dir().join(format!("{}.json", repo_last_part));
+            println!("Writing to {}", temp_file.display());
+            serde_json::to_writer_pretty(File::create(temp_file.clone())?, &formatted_data)?;
+            let image_file = args.image_file.unwrap_or(format!("{}.png", repo_last_part));
+            plot::run_stackplot(temp_file.display().to_string(), image_file)?;
             Ok(())
         }
     }
