@@ -38,13 +38,29 @@ uv run src/stackplot.py cohorts.json
 gix-of-theseus stackplot cohorts.json
 ```
 
-#### Some speed comparison
+# Caveats
+This tool is faster because it doesn't re-implement the full feature set of Git of Theseus. Notably it doesn't:
 
-This is just for fun, to make the author feel good that they didn't waste all this time Rewriting It In Rust for nothing.
+* collect author information, or anything but the year of the commit
+* plot the "memory" graph of commits
+* The only behavior is `--all-filetypes`: there is no filtering to "only source code files". This is coming but not a big priority.
 
-These are rough measurements using `time` on a M1 Max laptop, not real benchamrks.
+I plan on implementing some of these features, but they are not present yet. I don't find the author information valuable so I place a low priority on plotting it, "PRs welcome" if you really want it.
 
-When Git of Theseus was taking too long for me to wait, I gave the ETA displayed in the progress bar (after waiting for it to stabilize) and marked that result with a `~`.
+Another important caveat:
+*  `.git-rev-ignore` files are not supported. 
+
+As this is a custom blame implementation, several git features are not supported. Some of these can be filled in, but this tool is currently useful atm for a lot of repos and this doesn't seem to be a major issue.
+
+
+The stackplots generated are not 100% identical with the original's output. I would say they are 98% the same, which is fine for this type of analysis.
+
+#### Some speed comparison for fun
+
+This is just for fun, to make the author feel good that they didn't waste all this time Rewriting It In Rust.
+
+These are rough measurements using `time` on a M1 Max laptop, not real benchmarks. When Git of Theseus was taking too long for to wait, I gave the ETA displayed in the progress bar (after waiting for it to stabilize) and marked that result with a `~`.
+
 
 | Repo | Original [s] | This repo [s] | Speedup |
 |:---|---:|---:|---:|
@@ -62,8 +78,7 @@ BurntSushi/ripgrep| 15.8 | 1.4 | 11.3x
 
 * git-of-theseus was run with --procs 15 (seems a little IO bound on this machine) and with the --all-filetypes flag, to match this project's behavior.
 
-The (geometric) mean of the speedups is ~285x, though this is completely dependent on your sample, as the gap is much larger in huge old repos.
-This is measured on large repos, though it's somewhat defensible to do so as these are the ones that benefit the most from these types of graphs,
-and that have the nicest looking ones. Whereas you don't really, see a "Ship of Theseus" when running this on a personal side project that's 2 years old.
+The (geometric) mean of the speedups is ~285x, though this is completely dependent on your sample, as the gap is much larger in huge, old repos.
+This sample contains more of those, though it's somewhat defensible as these repos are the ones that benefit the most from these types of graphs. Whereas you don't really see a "Ship of Theseus" when running it on a personal side project that's 2 years old.
 
 I speculate that the runtime (and the speedup) is more related to total volume of code (SLOC) in a repo, though theoretically the main improvement should be making it linear in the number of commits instead of quadratic.
