@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Track a repo's composition over time"
 readme = "README.md"
+license = "Apache"
 license-file = "LICENSE.md"
 exclude = [".DS_Store", "**/.DS_Store"]
 
