@@ -1,41 +1,52 @@
 ## Gix Of Theseus
 
-A re-implementation of Erik Bern's [Git Of Theseus](https://github.com/erikbern/git-of-theseus), with fewer features but hundreds of times faster.
+A re-implementation of [Git Of Theseus](https://github.com/erikbern/git-of-theseus) by Erik Bern with fewer features but hundreds of times faster.
 
-Generates cohort analysis graphs of git repositories over time:
-![A stack plot of the composition of git's source code over the years](images/git.png)
+Generates graphs of the composition of git repositories over time:
+![A stack plot of the composition of git's source code over the years. Each year has its own color in the stack plot, making it look like a layer o sedimentary rock slowly weathered over time.](https://raw.githubusercontent.com/amedeedaboville/gix-of-theseus/main/images/git.png)
 Git's composition over time (6s to generate).
 
-And the linux repo (~1 minute to generate):
-![The same kind of graph but for linux](images/linux.png)
+The Linux repo (~1 minute to generate):
+![The same kind of graph but for linux](https://raw.githubusercontent.com/amedeedaboville/gix-of-theseus/main/images/linux.png)
 
 It' fast because it uses a specialized algorithm (inspired from [hercules](https://github.com/src-d/hercules)) to implement its own "incremental" git blame that keeps track of results as it scans the history of the repo, and because it's written in Rust, which gives it access to the wonderful [gitoxide](https://github.com/GitoxideLabs/gitoxide) and [rayon](https://docs.rs/rayon/latest/rayon/) crates.
 
 ## Installation
 
-Installation will be with `cargo install gix-of-theseus` once I publish the package.
+Install this project with cargo:
 
-For now, clone this repository and run `cargo build --release` to compile it. Then run `cargo install --path .`
+```
+cargo install gix-of-theseus
+```
 
-`uv` is recommended to be able to run the plotting scripts "automagically".
+The plotting script is bundled with the binary, but it needs `uv` or `pipx` to be installed on your computer, so make sure you have one installed:
+
+```
+pip install uv
+# or
+pip install pipx
+```
 
 ## Usage
 
 To get an image directly, (if you have `uv` installed):
 
 ```
-gix-of-theseus ~/repos/git/git --image-file git.png
+gix-of-theseus analyze ~/repos/git/git
 ```
 
-Will save its results to `${repo_name}.png`. Choose the output file's location with `--output-file`.
-Omitting the `--plot` flag will collect the data in the same cohorts.json format but not plot it.
+Will save its results to `${repo_name}/stackplot.png`. Choose a different output directory location with `--outdir`.
 
-The plotting script from Git Of Theseus has been re-included in this repo and updated to the PEP 723 single script file standard, so you can run it with `uv` without needing pip install or a virtualenv:
+The `--no-plot` flag will make the tool collect the data in the same cohorts.json format but not plot it.
+
+The python plotting script from Git Of Theseus has been re-included in this repo and updated to the PEP 723 single script file standard, so you can run it with `uv` without needing pip install or a virtualenv:
 
 ```
-uv run src/stackplot.py cohorts.json
-# future
 gix-of-theseus stackplot cohorts.json
+
+# equivalent of cloning this repo and doing:
+
+uv run src/stackplot.py cohorts.json
 ```
 
 # Caveats
@@ -44,21 +55,22 @@ This tool is faster because it doesn't re-implement the full feature set of Git 
 
 - collect author information, or plot anything but the year of the commit
 - plot the "forgetting curve" of commits
-- The only behavior is `--all-filetypes`: there is no filtering to "only source code files". This is coming but not a big priority.
+- The only behavior is `--all-filetypes`; there is no filtering to "only source code files". This is coming but not a big priority.
 
 I plan on implementing some of these features, but they are not present yet. I don't find the author information valuable so I place a low priority on plotting it, "PRs welcome" if you really want it.
 
 Another important caveat:
 
 - `.git-rev-ignore` files are not supported.
+- Neither are mailmaps.
 
-As this is a custom blame implementation, several git-specific features like `.git-rev-ignore` files (also mailmaps) are not supported. Some of these can be filled in, but this tool is currently useful atm for a lot of repos and this doesn't seem to be a major issue.
+As this is a custom blame implementation, git-specific like rev-ignore and mailmaps haven't been re-implemented yet. Some of these can be filled in later, but this tool is currently useful atm for a lot of repos and this doesn't seem to be a major issue.
 
-The stackplots generated are not 100% identical with the original's output. I would say they are 98% the same, which is fine for this type of analysis.
+The stackplots generated are not 100% identical with the original's output. I would say they're 98% the same, which is fine for this type of analysis.
 
 #### Some speed comparison for fun
 
-This is just for fun, to make this author feel good that they didn't waste all this time Rewriting It In Rust.
+This is just for fun, to make this author feel better about spending all this time Rewriting It In Rust.
 
 These are rough measurements using `time` on a M1 Max laptop, not real benchmarks. When Git of Theseus was taking too long for to wait, I gave the ETA displayed in the progress bar (after waiting for it to stabilize) and marked that result with a `~`.
 
@@ -66,19 +78,18 @@ These are rough measurements using `time` on a M1 Max laptop, not real benchmark
 | :-------------------- | -----------: | ------------: | ------: |
 | torvalds/linux        |       ~36000 |            58 |   ~620x |
 | ffmepg/ffmepg         |         8195 |           7.8 |   1050x |
+| elastic/elasticsearch |         8193 |           7.0 |   1170x |
+| git/git               |         3011 |           5.1 |    590x |
 | golang/go             |        ~3780 |           7.0 |   ~540x |
 | grpc/grpc             |        ~3600 |           7.4 |   ~486x |
-| git/git               |        ~2460 |           5.1 |   ~480x |
 | apache/spark          |        ~1800 |           6.5 |   ~277x |
-| elastic/elasticsearch |              |           7.0 |
-| bazelbuild/bazel      |              |           7.0 |
-| apache/echarts        |              |           7.2 |
+| python/cpython        |              |           6.5 |   ~277x |
 
 ---
 
 - git-of-theseus was run with --procs 15 (seems a little IO bound on this machine) and with the --all-filetypes flag, to match this project's behavior.
 
-The speedup on these large repos is conservatively ~300x, though the gap is larger in huge, old repos.
-This sample contains more of those, as these repos are the ones which benefit the most from a theseus graph. You don't get much insight when running it on a small, young repo.
+The speedup on these large repos is conservatively over ~300x, though the gap is larger in huge, old repos.
+This sample contains more of those, as they benefit the most from a "theseus graph". You don't get much insight when running it on a small, young repo.
 
 I speculate that the runtime (and the speedup) is more related to total volume of code (SLOC) in a repo, though theoretically the main improvement should be making it linear in the number of commits instead of quadratic.
