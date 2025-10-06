@@ -1,4 +1,7 @@
-use std::{env::temp_dir, fs::File};
+use std::{
+    fs::{self, File},
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 use clap::Parser;
@@ -23,33 +26,67 @@ pub struct PlotArgs {
     output_file: String,
 }
 #[derive(Debug, Parser)]
+pub struct AnalyzeArgs {
+    #[clap(short, long)]
+    input_file: String,
+    #[clap(short, long)]
+    output_file: String,
+}
+#[derive(Debug, Parser)]
 struct TheseusArgs {
     repo_path: String,
     #[clap(short, long)]
-    image_file: Option<String>,
+    outdir: Option<PathBuf>,
+    #[clap(short, long)]
+    no_plot: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommands {
-    //Just run the plot script on a cohorts.json file
+    /// Plot the data in a cohorts.json file
     Plot(PlotArgs),
-    /// Collect the data and optionally plot a chart for a repo.
-    Theseus(TheseusArgs),
+    /// Analyze a repo's contents and write the data to a cohorts.json file, and optionally plot it
+    Analyze(TheseusArgs),
 }
 
+fn setup_outdir(repo_path: &str, outdir: Option<PathBuf>) -> Result<PathBuf> {
+    let repo_path = Path::new(repo_path);
+    let repo_name = repo_path.file_name().unwrap().to_str().unwrap();
+
+    let outdir = outdir.unwrap_or_else(|| PathBuf::from(repo_name));
+    fs::create_dir_all(&outdir)?;
+    Ok(outdir)
+}
+fn analyze_repo(repo_path: &str, outdir: PathBuf) -> Result<PathBuf> {
+    let res = theseus::run_theseus(repo_path).expect("Error running theseus");
+    let formatted_data = formatter::format_cohort_data(res);
+    let cohorts_file = outdir.join("cohorts.json");
+    println!("Writing cohort data to {}", cohorts_file.display());
+    serde_json::to_writer_pretty(File::create(cohorts_file.clone())?, &formatted_data)?;
+    Ok(cohorts_file)
+}
 fn main() -> Result<()> {
     let args = Cli::parse();
     match args.subcommand {
         Subcommands::Plot(args) => plot::run_stackplot(args.input_file, args.output_file),
-        Subcommands::Theseus(args) => {
-            let res = theseus::run_theseus(&args.repo_path).expect("Error running theseus");
-            let formatted_data = formatter::format_cohort_data(res);
-            let repo_last_part = args.repo_path.split('/').last().unwrap();
-            let temp_file = temp_dir().join(format!("{}.json", repo_last_part));
-            println!("Writing to {}", temp_file.display());
-            serde_json::to_writer_pretty(File::create(temp_file.clone())?, &formatted_data)?;
-            let image_file = args.image_file.unwrap_or(format!("{}.png", repo_last_part));
-            plot::run_stackplot(temp_file.display().to_string(), image_file)?;
+        Subcommands::Analyze(args) => {
+            let python_runner = plot::get_python_runner();
+            let outdir = setup_outdir(&args.repo_path, args.outdir)?;
+            let cohorts_file =
+                analyze_repo(&args.repo_path, outdir.clone()).expect("Error analyzing repo");
+            if !args.no_plot {
+                if python_runner.is_some() {
+                    let image_file = outdir.join("stackplot.png");
+                    plot::run_stackplot(
+                        cohorts_file.display().to_string().clone(),
+                        image_file.display().to_string(),
+                    )?;
+                } else {
+                    println!(
+                        "No Python PEP 723 script runner found (tried: uv, pipx), we won't be able to plot the chart automatically and will only save the raw to cohorts.json.\nYou can install uv with `pip install uv` or pipx with `pip install pipx`"
+                    );
+                }
+            }
             Ok(())
         }
     }
