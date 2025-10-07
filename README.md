@@ -70,11 +70,11 @@ These are rough measurements just for fun, to make this author feel better about
 
 | Repo                  | Original [s] | This repo [s] | Speedup |
 | :-------------------- | -----------: | ------------: | ------: |
-| torvalds/linux        |       ~36000 |            58 |   ~620x |
-| ffmepg/ffmepg         |         8195 |           7.8 |   1050x |
-| elastic/elasticsearch |         8193 |           7.0 |   1170x |
-| python/cpython        |         7397 |           6.5 |   1138x |
-| git/git               |         3011 |           5.1 |    590x |
+| torvalds/linux        |       ~36000 |            68 |   ~530x |
+| ffmpeg/ffmpeg         |         8195 |           9.6 |    853x |
+| elastic/elasticsearch |         8193 |           8.4 |    975x |
+| python/cpython        |         7397 |          15.0 |    493x |
+| git/git               |         3011 |           6.2 |    579x |
 | golang/go             |         3643 |           7.0 |    540x |
 
 ---
