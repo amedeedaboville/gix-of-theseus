@@ -1,8 +1,8 @@
 pub mod actions;
 pub mod blame;
-pub mod collectors;
 pub mod formatter;
 pub mod gix_helpers;
+pub mod list_in_range;
 pub mod plot;
 pub mod repo_blame_snapshot;
 pub mod theseus;
