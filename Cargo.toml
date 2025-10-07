@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2024"
 description = "Track a repo's composition over time"
 readme = "README.md"
-license = "Apache"
+license = "Apache-2.0"
 repository = "https://github.com/amedeedaboville/gix-of-theseus"
 exclude = [".DS_Store", "**/.DS_Store"]
 
