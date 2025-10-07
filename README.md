@@ -72,7 +72,7 @@ These are rough measurements just for fun, to make this author feel better about
 | :-------------------- | -----------: | ------------: | ------: |
 | torvalds/linux        |       ~36000 |            68 |   ~530x |
 | ffmpeg/ffmpeg         |         8195 |           9.6 |    853x |
-| elastic/elasticsearch |         8193 |           8.4 |    975x |
+| elastic/elasticsearch |         8193 |           9.4 |    871x |
 | python/cpython        |         7397 |          15.0 |    493x |
 | git/git               |         3011 |           6.2 |    579x |
 | golang/go             |         3643 |           7.0 |    540x |
