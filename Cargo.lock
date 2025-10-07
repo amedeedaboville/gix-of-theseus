@@ -132,9 +132,6 @@ name = "bitflags"
 version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a65b545ab31d687cff52899d4890855fec459eb6afe0da6417b8a18da87aa29"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "block-buffer"
@@ -205,7 +202,6 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
- "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -355,7 +351,6 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
- "rayon",
 ]
 
 [[package]]
@@ -549,7 +544,6 @@ dependencies = [
  "gix-submodule",
  "gix-tempfile",
  "gix-trace",
- "gix-transport",
  "gix-traverse",
  "gix-url",
  "gix-utils",
@@ -559,9 +553,7 @@ dependencies = [
  "gix-worktree-stream",
  "once_cell",
  "parking_lot",
- "prodash",
  "regex",
- "serde",
  "signal-hook",
  "smallvec",
  "thiserror",
@@ -577,7 +569,6 @@ dependencies = [
  "gix-date",
  "gix-utils",
  "itoa",
- "serde",
  "thiserror",
  "winnow",
 ]
@@ -608,7 +599,6 @@ dependencies = [
  "gix-quote",
  "gix-trace",
  "kstring",
- "serde",
  "smallvec",
  "thiserror",
  "unicode-bom",
@@ -655,7 +645,6 @@ dependencies = [
  "gix-chunk",
  "gix-hash",
  "memmap2",
- "serde",
  "thiserror",
 ]
 
@@ -708,7 +697,6 @@ dependencies = [
  "gix-sec",
  "gix-trace",
  "gix-url",
- "serde",
  "thiserror",
 ]
 
@@ -721,7 +709,6 @@ dependencies = [
  "bstr",
  "itoa",
  "jiff",
- "serde",
  "smallvec",
  "thiserror",
 ]
@@ -853,7 +840,6 @@ dependencies = [
  "bstr",
  "gix-features",
  "gix-path",
- "serde",
 ]
 
 [[package]]
@@ -864,7 +850,6 @@ checksum = "251fad79796a731a2a7664d9ea95ee29a9e99474de2769e152238d4fdb69d50e"
 dependencies = [
  "faster-hex",
  "gix-features",
- "serde",
  "sha1-checked",
  "thiserror",
 ]
@@ -890,7 +875,6 @@ dependencies = [
  "gix-glob",
  "gix-path",
  "gix-trace",
- "serde",
  "unicode-bom",
 ]
 
@@ -918,7 +902,6 @@ dependencies = [
  "libc",
  "memmap2",
  "rustix",
- "serde",
  "smallvec",
  "thiserror",
 ]
@@ -943,7 +926,6 @@ dependencies = [
  "bstr",
  "gix-actor",
  "gix-date",
- "serde",
  "thiserror",
 ]
 
@@ -979,7 +961,6 @@ dependencies = [
  "gix-utils",
  "gix-validate",
  "itoa",
- "serde",
  "smallvec",
  "thiserror",
  "winnow",
@@ -1002,20 +983,18 @@ dependencies = [
  "gix-path",
  "gix-quote",
  "parking_lot",
- "serde",
  "tempfile",
  "thiserror",
 ]
 
 [[package]]
 name = "gix-of-theseus"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "crossbeam-channel",
- "dashmap",
  "gix",
  "indicatif",
  "proptest",
@@ -1039,7 +1018,6 @@ dependencies = [
  "gix-object",
  "gix-path",
  "memmap2",
- "serde",
  "smallvec",
  "thiserror",
  "uluru",
@@ -1126,7 +1104,6 @@ dependencies = [
  "gix-transport",
  "gix-utils",
  "maybe-async",
- "serde",
  "thiserror",
  "winnow",
 ]
@@ -1159,7 +1136,6 @@ dependencies = [
  "gix-utils",
  "gix-validate",
  "memmap2",
- "serde",
  "thiserror",
  "winnow",
 ]
@@ -1193,7 +1169,6 @@ dependencies = [
  "gix-object",
  "gix-revwalk",
  "gix-trace",
- "serde",
  "thiserror",
 ]
 
@@ -1221,7 +1196,6 @@ dependencies = [
  "bitflags",
  "gix-path",
  "libc",
- "serde",
  "windows-sys 0.59.0",
 ]
 
@@ -1234,7 +1208,6 @@ dependencies = [
  "bstr",
  "gix-hash",
  "gix-lock",
- "serde",
  "thiserror",
 ]
 
@@ -1311,7 +1284,6 @@ dependencies = [
  "gix-quote",
  "gix-sec",
  "gix-url",
- "serde",
  "thiserror",
 ]
 
@@ -1342,7 +1314,6 @@ dependencies = [
  "gix-features",
  "gix-path",
  "percent-encoding",
- "serde",
  "thiserror",
  "url",
 ]
@@ -1385,7 +1356,6 @@ dependencies = [
  "gix-object",
  "gix-path",
  "gix-validate",
- "serde",
 ]
 
 [[package]]
@@ -1716,7 +1686,6 @@ version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "558bf9508a558512042d3095138b1f7b8fe90c5467d94f9f1da28b3731c5dbd1"
 dependencies = [
- "serde",
  "static_assertions",
 ]
 
@@ -2202,9 +2171,6 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "stable_deref_trait"
