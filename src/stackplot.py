@@ -55,6 +55,7 @@ def stack_plot(
     outfile: str = "stack_plot.png",
     max_n: int = 40,
     normalize: bool = False,
+    title: str = "",
 ) -> None:
     if not display:
         matplotlib.use("Agg")
@@ -73,6 +74,8 @@ def stack_plot(
         y = 100.0 * numpy.array(y) / numpy.sum(y, axis=0)
     pyplot.figure(figsize=(16, 12), dpi=120)
     pyplot.style.use("ggplot")
+    if title:
+        pyplot.title(title)
     ts = [dateutil.parser.parse(t) for t in data["ts"]]
     colors = generate_n_colors(len(labels))
     pyplot.stackplot(ts, y, labels=labels, colors=colors)
@@ -103,6 +106,12 @@ def stack_plot_cmdline() -> None:
         default=40,
         type=int,
         help='Max number of dataseries (will roll everything else into "other") (default: %(default)s)',
+    )
+    parser.add_argument(
+        "--title",
+        default=None,
+        type=str,
+        help='Title of the plot (default: "")',
     )
     parser.add_argument(
         "--normalize", action="store_true", help="Normalize the plot to 100%%"

@@ -28,7 +28,7 @@ pub fn get_python_runner() -> Option<String> {
         })
         .clone()
 }
-pub fn run_stackplot(input_file: String, output_file: String) -> Result<()> {
+pub fn run_stackplot(input_file: String, output_file: String, title: Option<String>) -> Result<()> {
     let runner = get_python_runner().ok_or_else(|| anyhow::anyhow!("No Python runner found"))?;
 
     let mut path = env::temp_dir();
@@ -43,6 +43,8 @@ pub fn run_stackplot(input_file: String, output_file: String) -> Result<()> {
             .arg(&path)
             .arg("--outfile")
             .arg(output_file)
+            .arg("--title")
+            .arg(title.unwrap_or_default())
             .arg(input_file)
             .status()?
     } else if runner == "pipx" {
@@ -51,6 +53,8 @@ pub fn run_stackplot(input_file: String, output_file: String) -> Result<()> {
             .arg(&path)
             .arg("--outfile")
             .arg(output_file)
+            .arg("--title")
+            .arg(title.unwrap_or_default())
             .arg(input_file)
             .status()?
     } else {

@@ -49,14 +49,6 @@ enum Subcommands {
     Analyze(TheseusArgs),
 }
 
-fn setup_outdir(repo_path: &str, outdir: Option<PathBuf>) -> Result<PathBuf> {
-    let repo_path = Path::new(repo_path);
-    let repo_name = repo_path.file_name().unwrap().to_str().unwrap();
-
-    let outdir = outdir.unwrap_or_else(|| PathBuf::from(repo_name));
-    fs::create_dir_all(&outdir)?;
-    Ok(outdir)
-}
 fn analyze_repo(repo_path: &str, outdir: PathBuf) -> Result<PathBuf> {
     let res = theseus::run_theseus(repo_path).expect("Error running theseus");
     let formatted_data = formatter::format_cohort_data(res);
@@ -68,10 +60,14 @@ fn analyze_repo(repo_path: &str, outdir: PathBuf) -> Result<PathBuf> {
 fn main() -> Result<()> {
     let args = Cli::parse();
     match args.subcommand {
-        Subcommands::Plot(args) => plot::run_stackplot(args.input_file, args.output_file),
+        Subcommands::Plot(args) => plot::run_stackplot(args.input_file, args.output_file, None),
         Subcommands::Analyze(args) => {
             let python_runner = plot::get_python_runner();
-            let outdir = setup_outdir(&args.repo_path, args.outdir)?;
+            let repo_path = Path::new(&args.repo_path);
+            let repo_name = repo_path.file_name().unwrap().to_str().unwrap();
+
+            let outdir = args.outdir.unwrap_or_else(|| PathBuf::from(repo_name));
+            fs::create_dir_all(&outdir)?;
             let cohorts_file =
                 analyze_repo(&args.repo_path, outdir.clone()).expect("Error analyzing repo");
             if !args.no_plot {
@@ -80,6 +76,7 @@ fn main() -> Result<()> {
                     plot::run_stackplot(
                         cohorts_file.display().to_string().clone(),
                         image_file.display().to_string(),
+                        Some(repo_name.to_string()),
                     )?;
                 } else {
                     println!(
