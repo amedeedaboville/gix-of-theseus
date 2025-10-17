@@ -3,11 +3,18 @@ use crate::blame::LineNumber;
 use crate::gix_helpers::{Granularity, get_blob_diff, list_commits_with_granularity};
 use crate::repo_blame_snapshot::BlameProcessor;
 use anyhow::Result;
-use gix::bstr::ByteSlice;
-use gix::date::time::CustomFormat;
-use gix::diff::object::TreeRefIter;
-use gix::diff::tree_with_rewrites;
-use gix::diff::tree_with_rewrites::{Action as DiffAction, Change, ChangeRef};
+use gix_date::time::CustomFormat;
+use gix_diff::blob::Platform;
+use gix_hash::ObjectId;
+use gix_object::FindExt;
+use gix_odb::HandleArc;
+
+use gix_diff::object::TreeRefIter;
+use gix_diff::object::bstr::BString;
+use gix_diff::object::bstr::ByteSlice;
+use gix_diff::tree_with_rewrites;
+use gix_diff::tree_with_rewrites::{Action as DiffAction, Change, ChangeRef};
+use gix_object::tree::EntryMode;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::cell::RefCell;
@@ -17,7 +24,7 @@ use thread_local::ThreadLocal;
 // For now we only care about the year, though the time_string could
 // be used to plot weeks.
 pub struct CommitCohortInfo {
-    pub id: gix::ObjectId,
+    pub id: ObjectId,
     pub time_string: String,
     pub year: u32,
 }
@@ -30,35 +37,70 @@ pub struct TheseusResult {
 }
 
 pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error::Error>> {
-    let repo = gix::open(repo_path)?;
-    let safe_repo = repo.clone().into_sync();
-    let weekly_commits = list_commits_with_granularity(&repo, Granularity::Weekly, None, None)?;
-    let processor = BlameProcessor::<usize>::new(weekly_commits[0].id);
+    // Create ODB handle using the same pattern as in gix_helpers.rs
+    let git_dir = if repo_path.ends_with(".git") {
+        repo_path.to_string()
+    } else {
+        format!("{}/.git", repo_path)
+    };
+    let git_dir_path = std::path::Path::new(&git_dir);
+    let objects_dir = git_dir_path.join("objects");
+    let odb_handle = gix_odb::at(&objects_dir)?.into_arc()?; // Convert to thread-safe HandleArc
+
+    let weekly_commit_ids_and_times =
+        list_commits_with_granularity(repo_path, Granularity::Weekly, None, None)?;
+    let processor = BlameProcessor::<usize>::new(weekly_commit_ids_and_times[0].0);
     let sender = processor.sender();
 
-    //Each thread gets its own repo handle and its own diff cache
+    //Each thread gets its own ODB handle and its own diff cache
     let tl = ThreadLocal::new();
     let get_thread_local_vars = || {
         tl.get_or(|| {
-            let repo = safe_repo.clone().to_thread_local();
-            let platform = RefCell::new(repo.diff_resource_cache_for_tree_diff().unwrap());
-            (repo, platform)
+            let attr_stack = gix_worktree::stack::State::AttributesAndIgnoreStack {
+                attributes: gix_worktree::stack::state::Attributes::default(),
+                ignore: gix_worktree::stack::state::Ignore::default(),
+            };
+            let platform_cell = RefCell::new(Platform::new(
+                gix_diff::blob::platform::Options::default(),
+                gix_diff::blob::Pipeline::new(
+                    gix_diff::blob::pipeline::WorktreeRoots::default(),
+                    gix_filter::Pipeline::default(),
+                    vec![],
+                    gix_diff::blob::pipeline::Options::default(),
+                ),
+                gix_diff::blob::pipeline::Mode::default(),
+                gix_worktree::Stack::from_state_and_ignore_case(
+                    git_dir_path,
+                    false,
+                    gix_worktree::stack::State::AttributesAndIgnoreStack {
+                        attributes: gix_worktree::stack::state::Attributes::default(),
+                        ignore: gix_worktree::stack::state::Ignore::default(),
+                    },
+                    &gix_index::State::default(),
+                    git_dir_path
+                        .join("index")
+                        .as_path()
+                        .to_str()
+                        .unwrap()
+                        .as_bytes(),
+                ),
+            ));
+            (odb_handle.clone(), platform_cell)
         })
     };
-    let progress_bar = ProgressBar::new(weekly_commits.len() as u64).with_style(
+    let progress_bar = ProgressBar::new(weekly_commit_ids_and_times.len() as u64).with_style(
         ProgressStyle::default_bar()
             .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta_precise}) {per_sec:0.1} {msg}")
             .unwrap()
             .progress_chars("=>-"),
     );
-    let commit_trees_and_years: Vec<(gix::ObjectId, String, Vec<u8>, u32)> = weekly_commits
+    let commit_trees_and_years: Vec<(ObjectId, String, Vec<u8>, u32)> = weekly_commit_ids_and_times
         .into_iter()
-        .map(|commit| {
-            let time = commit.time().unwrap();
+        .map(|(commit_id, time, tree_data)| {
             (
-                commit.id().to_owned().into(),
+                commit_id.to_owned().into(),
                 time.format(CustomFormat::new("%Y-%m-%d %H:%M:%S")),
-                commit.tree().unwrap().detach().data,
+                tree_data,
                 time.format(CustomFormat::new("%Y")).parse().unwrap(),
             )
         })
@@ -68,11 +110,11 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
     let commit_changes_and_cohorts: Vec<(Vec<Change>, usize)> = (0..commit_trees_and_years.len())
         .into_par_iter()
         .map(|i| {
-            let (repo, platform_cell) = get_thread_local_vars();
+            let (thread_odb, platform_cell) = get_thread_local_vars();
             let mut platform = platform_cell.borrow_mut();
 
-            let mut tree_diff_state = gix::diff::tree::State::default();
-            let mut objects = &repo.objects;
+            let mut tree_diff_state = gix_diff::tree::State::default();
+            let mut objects = &thread_odb;
 
             let (_id, _ts, current_tree_data, _year) = &commit_trees_and_years[i];
             let previous_tree_data = if i > 0 {
@@ -94,9 +136,9 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                     }
                     Ok(DiffAction::Continue)
                 },
-                gix::diff::tree_with_rewrites::Options {
-                    location: Some(gix::diff::tree::recorder::Location::Path),
-                    rewrites: Some(gix::diff::Rewrites::default()),
+                gix_diff::tree_with_rewrites::Options {
+                    location: Some(gix_diff::tree::recorder::Location::Path),
+                    rewrites: Some(gix_diff::Rewrites::default()),
                 },
             )
             .expect("tree diff failed");
@@ -118,10 +160,10 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
             .into_par_iter()
             .try_for_each(
                 |change| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-                    let (thread_repo, platform_cell) = get_thread_local_vars();
+                    let (thread_odb, platform_cell) = get_thread_local_vars();
                     match change {
                         Change::Addition { location, id, .. } => {
-                            handle_file_addition(&sender, thread_repo, id, &location, commit_idx)?;
+                            handle_file_addition(&sender, thread_odb, id, &location, commit_idx)?;
                         }
                         Change::Deletion { location, .. } => {
                             handle_file_deletion(&sender, location)?;
@@ -135,7 +177,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                         } => {
                             if handle_entry_mode_change(
                                 &sender,
-                                thread_repo,
+                                &thread_odb,
                                 previous_entry_mode,
                                 entry_mode,
                                 id,
@@ -146,7 +188,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             }
                             handle_file_modification(
                                 &sender,
-                                thread_repo,
+                                thread_odb,
                                 platform_cell,
                                 previous_id,
                                 id,
@@ -172,7 +214,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                                 .unwrap();
                             if handle_entry_mode_change(
                                 &sender,
-                                thread_repo,
+                                &thread_odb,
                                 source_entry_mode,
                                 entry_mode,
                                 id,
@@ -185,7 +227,7 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             if diff.is_some() {
                                 handle_file_modification(
                                     &sender,
-                                    thread_repo,
+                                    &thread_odb,
                                     platform_cell,
                                     source_id,
                                     id,
@@ -230,11 +272,11 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
 
 fn handle_file_modification(
     sender: &crossbeam_channel::Sender<Action<usize>>,
-    thread_repo: &gix::Repository,
-    platform_cell: &std::cell::RefCell<gix::diff::blob::Platform>,
-    previous_id: gix::ObjectId,
-    id: gix::ObjectId,
-    location: &gix::bstr::BString,
+    thread_odb: &HandleArc,
+    platform_cell: &std::cell::RefCell<gix_diff::blob::Platform>,
+    previous_id: ObjectId,
+    id: ObjectId,
+    location: &BString,
     commit_idx: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut platform_borrow = platform_cell.borrow_mut();
@@ -243,7 +285,7 @@ fn handle_file_modification(
         previous_id,
         id,
         location.as_ref(),
-        &thread_repo.objects,
+        thread_odb,
         commit_idx,
     )?;
     sender
@@ -257,16 +299,17 @@ fn handle_file_modification(
 
 fn handle_file_addition(
     sender: &crossbeam_channel::Sender<Action<usize>>,
-    thread_repo: &gix::Repository,
-    id: gix::ObjectId,
-    location: &gix::bstr::BString,
+    thread_odb: &HandleArc,
+    id: ObjectId,
+    location: &BString,
     commit_idx: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let blob = thread_repo.find_blob(id)?;
+    let mut buffer = Vec::new();
+    let blob = thread_odb.find_blob(id.as_ref(), &mut buffer)?.data;
     sender
         .send(Action::AddFile {
             path: location.clone(),
-            total_lines: blob.data.lines().count() as LineNumber,
+            total_lines: blob.lines().count() as LineNumber,
             cohort: commit_idx,
         })
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -275,7 +318,7 @@ fn handle_file_addition(
 
 fn handle_file_deletion(
     sender: &crossbeam_channel::Sender<Action<usize>>,
-    location: gix::bstr::BString,
+    location: BString,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     sender
         .send(Action::DeleteFile { path: location })
@@ -286,18 +329,18 @@ fn handle_file_deletion(
 // Returns true if the entry mode change was handled and no more processing is needed
 fn handle_entry_mode_change(
     sender: &crossbeam_channel::Sender<Action<usize>>,
-    thread_repo: &gix::Repository,
-    previous_entry_mode: gix::object::tree::EntryMode,
-    entry_mode: gix::object::tree::EntryMode,
-    id: gix::ObjectId,
-    location: &gix::bstr::BString,
+    thread_odb: &HandleArc,
+    previous_entry_mode: EntryMode,
+    entry_mode: EntryMode,
+    id: ObjectId,
+    location: &BString,
     commit_idx: usize,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     if previous_entry_mode != entry_mode {
         let prev_is_blob = previous_entry_mode.is_blob();
         let new_is_blob = entry_mode.is_blob();
         if !prev_is_blob && new_is_blob {
-            handle_file_addition(sender, thread_repo, id, location, commit_idx)?;
+            handle_file_addition(sender, thread_odb, id, location, commit_idx)?;
             return Ok(true);
         } else if prev_is_blob && !new_is_blob {
             handle_file_deletion(sender, location.clone())?;

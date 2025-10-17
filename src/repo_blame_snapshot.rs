@@ -2,7 +2,8 @@ use crate::actions::Action;
 use crate::blame::{FileBlame, Keyable, LineDiffs, LineNumber};
 use anyhow::Result;
 use crossbeam_channel::{Sender, unbounded};
-use gix::bstr::BString;
+use gix_diff::object::bstr::BString;
+use gix_hash::ObjectId;
 use std::collections::HashMap;
 use std::thread::{JoinHandle, spawn};
 
@@ -13,7 +14,7 @@ pub struct RepositoryBlameSnapshot<CommitKey>
 where
     CommitKey: Keyable,
 {
-    pub commit_id: gix::ObjectId,
+    pub commit_id: ObjectId,
     pub file_blames: HashMap<BString, FileBlame<CommitKey>>,
     pub running_cohort_stats: HashMap<CommitKey, i64>,
     pub commit_results: Vec<Vec<(CommitKey, i64)>>,
@@ -23,7 +24,7 @@ impl<CommitKey> RepositoryBlameSnapshot<CommitKey>
 where
     CommitKey: Keyable,
 {
-    pub fn new(commit_id: gix::ObjectId) -> Self {
+    pub fn new(commit_id: ObjectId) -> Self {
         Self {
             commit_id,
             file_blames: HashMap::new(),
@@ -31,7 +32,7 @@ where
             commit_results: Vec::new(),
         }
     }
-    pub fn set_commit_id(&mut self, commit_id: gix::ObjectId) {
+    pub fn set_commit_id(&mut self, commit_id: ObjectId) {
         self.commit_id = commit_id;
     }
 
@@ -133,7 +134,7 @@ impl<CommitKey> BlameProcessor<CommitKey>
 where
     CommitKey: Keyable + Send + 'static,
 {
-    pub fn new(initial_commit_id: gix::ObjectId) -> Self {
+    pub fn new(initial_commit_id: ObjectId) -> Self {
         let (sender, receiver) = unbounded();
         let mut snapshot = RepositoryBlameSnapshot::new(initial_commit_id);
 

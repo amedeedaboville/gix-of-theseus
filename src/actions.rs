@@ -1,5 +1,6 @@
 use crate::blame::{Keyable, LineDiffs, LineNumber};
-use gix::bstr::BString;
+use gix_diff::object::bstr::BString;
+use gix_hash::ObjectId;
 
 #[derive(Debug)]
 pub enum Action<CommitKey>
@@ -23,5 +24,5 @@ where
         line_diffs: LineDiffs<CommitKey>,
     },
     FinishCommit,
-    SetCommitId(gix::ObjectId),
+    SetCommitId(ObjectId),
 }
