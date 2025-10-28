@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod blame;
+pub mod file_types;
 pub mod formatter;
 pub mod gix_helpers;
 pub mod plot;
