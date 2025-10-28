@@ -996,6 +996,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "gix",
+ "globset",
  "indicatif",
  "proptest",
  "rayon",
@@ -1394,6 +1395,19 @@ dependencies = [
  "gix-traverse",
  "parking_lot",
  "thiserror",
+]
+
+[[package]]
+name = "globset"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
