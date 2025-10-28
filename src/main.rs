@@ -51,8 +51,8 @@ enum Subcommands {
     Analyze(TheseusArgs),
 }
 
-fn analyze_repo(repo_path: &str, outdir: PathBuf) -> Result<PathBuf> {
-    let res = theseus::run_theseus(repo_path).expect("Error running theseus");
+fn analyze_repo(repo_path: &str, outdir: PathBuf, all_filetypes: bool) -> Result<PathBuf> {
+    let res = theseus::run_theseus(repo_path, all_filetypes).expect("Error running theseus");
     let formatted_data = formatter::format_cohort_data(res);
     let cohorts_file = outdir.join("cohorts.json");
     println!("Writing cohort data to {}", cohorts_file.display());
@@ -70,8 +70,8 @@ fn main() -> Result<()> {
 
             let outdir = args.outdir.unwrap_or_else(|| PathBuf::from(repo_name));
             fs::create_dir_all(&outdir)?;
-            let cohorts_file =
-                analyze_repo(&args.repo_path, outdir.clone()).expect("Error analyzing repo");
+            let cohorts_file = analyze_repo(&args.repo_path, outdir.clone(), args.all_filetypes)
+                .expect("Error analyzing repo");
             if !args.no_plot {
                 if python_runner.is_some() {
                     let image_file = outdir.join("stackplot.png");

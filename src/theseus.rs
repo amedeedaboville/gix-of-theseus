@@ -1,5 +1,6 @@
 use crate::actions::Action;
 use crate::blame::LineNumber;
+use crate::file_types::is_allowed_filetype;
 use crate::gix_helpers::{Granularity, get_blob_diff, list_commits_with_granularity};
 use crate::repo_blame_snapshot::BlameProcessor;
 use anyhow::Result;
@@ -29,7 +30,10 @@ pub struct TheseusResult {
     pub cohort_data: Vec<Vec<(usize, i64)>>,
 }
 
-pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error::Error>> {
+pub fn run_theseus(
+    repo_path: &str,
+    all_filetypes: bool,
+) -> Result<TheseusResult, Box<dyn std::error::Error>> {
     let repo = gix::open(repo_path)?;
     let safe_repo = repo.clone().into_sync();
     let weekly_commits = list_commits_with_granularity(&repo, Granularity::Weekly, None, None)?;
@@ -119,11 +123,18 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
             .try_for_each(
                 |change| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let (thread_repo, platform_cell) = get_thread_local_vars();
+
                     match change {
                         Change::Addition { location, id, .. } => {
+                            if !all_filetypes && !is_allowed_filetype(location.as_bstr()) {
+                                return Ok(());
+                            }
                             handle_file_addition(&sender, thread_repo, id, &location, commit_idx)?;
                         }
                         Change::Deletion { location, .. } => {
+                            if !all_filetypes && !is_allowed_filetype(location.as_bstr()) {
+                                return Ok(());
+                            }
                             handle_file_deletion(&sender, location)?;
                         }
                         Change::Modification {
@@ -133,6 +144,9 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             entry_mode,
                             id,
                         } => {
+                            if !all_filetypes && !is_allowed_filetype(location.as_bstr()) {
+                                return Ok(());
+                            }
                             if handle_entry_mode_change(
                                 &sender,
                                 thread_repo,
@@ -164,34 +178,50 @@ pub fn run_theseus(repo_path: &str) -> Result<TheseusResult, Box<dyn std::error:
                             source_entry_mode,
                             ..
                         } => {
-                            sender
-                                .send(Action::RenameFile {
-                                    old_path: source_location,
-                                    new_path: location.clone(),
-                                })
-                                .unwrap();
-                            if handle_entry_mode_change(
-                                &sender,
-                                thread_repo,
-                                source_entry_mode,
-                                entry_mode,
-                                id,
-                                &location,
-                                commit_idx,
-                            )? {
-                                return Ok(());
-                            }
+                            let old_allowed = (all_filetypes
+                                || is_allowed_filetype(source_location.as_bstr()))
+                                && source_entry_mode.is_blob();
+                            let new_allowed = (all_filetypes
+                                || is_allowed_filetype(location.as_bstr()))
+                                && entry_mode.is_blob();
 
-                            if diff.is_some() {
-                                handle_file_modification(
-                                    &sender,
-                                    thread_repo,
-                                    platform_cell,
-                                    source_id,
-                                    id,
-                                    &location,
-                                    commit_idx,
-                                )?;
+                            match (old_allowed, new_allowed) {
+                                (true, true) => {
+                                    sender
+                                        .send(Action::RenameFile {
+                                            old_path: source_location,
+                                            new_path: location.clone(),
+                                        })
+                                        .unwrap();
+                                    if diff.is_some() {
+                                        handle_file_modification(
+                                            &sender,
+                                            thread_repo,
+                                            platform_cell,
+                                            source_id,
+                                            id,
+                                            &location,
+                                            commit_idx,
+                                        )?;
+                                    }
+                                }
+                                (true, false) => {
+                                    handle_file_deletion(&sender, source_location)?;
+                                    return Ok(());
+                                }
+                                (false, true) => {
+                                    handle_file_addition(
+                                        &sender,
+                                        thread_repo,
+                                        id,
+                                        &location,
+                                        commit_idx,
+                                    )?;
+                                    return Ok(());
+                                }
+                                (false, false) => {
+                                    return Ok(());
+                                }
                             }
                         }
                     };
