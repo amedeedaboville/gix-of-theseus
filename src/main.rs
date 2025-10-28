@@ -39,6 +39,8 @@ struct TheseusArgs {
     outdir: Option<PathBuf>,
     #[clap(short, long)]
     no_plot: bool,
+    #[clap(short, long, default_value = "false")]
+    all_filetypes: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
