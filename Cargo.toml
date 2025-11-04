@@ -1,6 +1,6 @@
 [package]
 name = "gix-of-theseus"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 description = "Track a repo's composition over time"
 readme = "README.md"

@@ -49,6 +49,8 @@ gix-of-theseus stackplot cohorts.json
 uv run src/stackplot.py cohorts.json
 ```
 
+By default this tool will not count files that don't "look like" source code (eg end in a recognizable extension like .cpp or .ts). You can turn this behavior off with the `--all-filetypes` flag.
+
 # Caveats
 
 This tool is faster because it doesn't re-implement the full feature set of Git of Theseus. Notably it doesn't:
