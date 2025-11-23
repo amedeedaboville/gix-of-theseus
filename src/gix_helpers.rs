@@ -32,17 +32,17 @@ pub fn list_commits_with_granularity(
         let datetime = DateTime::from_timestamp(commit_time.seconds, 0).unwrap();
 
         // If the commit is before the start time, end the loop early
-        if let Some(start) = start {
-            if datetime < start {
-                break;
-            }
+        if let Some(start) = start
+            && datetime < start
+        {
+            break;
         }
 
         // If the commit is after the end time, skip this commit
-        if let Some(end) = end {
-            if datetime > end {
-                continue;
-            }
+        if let Some(end) = end
+            && datetime > end
+        {
+            continue;
         }
 
         let key = match granularity {
