@@ -12,6 +12,7 @@ use gix::diff::tree_with_rewrites::{Action as DiffAction, Change, ChangeRef};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use thread_local::ThreadLocal;
 
 // Information about a commit that we use to make the graphs.
@@ -31,7 +32,7 @@ pub struct TheseusResult {
 }
 
 pub fn run_theseus(
-    repo_path: &str,
+    repo_path: &PathBuf,
     all_filetypes: bool,
 ) -> Result<TheseusResult, Box<dyn std::error::Error>> {
     let repo = gix::open(repo_path)?;
@@ -76,7 +77,7 @@ pub fn run_theseus(
             let mut platform = platform_cell.borrow_mut();
 
             let mut tree_diff_state = gix::diff::tree::State::default();
-            let mut objects = &repo.objects;
+            let objects = &repo.objects;
 
             let (_id, _ts, current_tree_data, _year) = &commit_trees_and_years[i];
             let previous_tree_data = if i > 0 {
@@ -91,7 +92,7 @@ pub fn run_theseus(
                 TreeRefIter::from_bytes(current_tree_data.as_slice()),
                 &mut platform,
                 &mut tree_diff_state,
-                &mut objects,
+                &objects,
                 |change: ChangeRef<'_>| -> Result<DiffAction, Box<dyn std::error::Error + Send + Sync>> {
                     if change.entry_mode().is_blob() || change.source_entry_mode_and_id().0.is_blob() {
                         work_todo.push(change.into_owned());
@@ -112,9 +113,7 @@ pub fn run_theseus(
     // We go through it serially, but we can process each commit's changes in parallel.
     for (work_todo, commit_idx) in progress_bar.wrap_iter(commit_changes_and_cohorts.into_iter()) {
         sender
-            .send(Action::SetCommitId(
-                commit_trees_and_years[commit_idx].0.clone(),
-            ))
+            .send(Action::SetCommitId(commit_trees_and_years[commit_idx].0))
             .unwrap();
 
         // For any one commit, we process the changes that commit makes to the tree in parallel:
@@ -245,11 +244,11 @@ pub fn run_theseus(
     let results = processor.finish();
 
     let commit_infos = commit_trees_and_years
-        .iter()
-        .map(|(id, ts, _, year)| CommitCohortInfo {
-            id: id.clone(),
-            time_string: ts.clone(),
-            year: *year,
+        .into_iter()
+        .map(|(id, time_string, _, year)| CommitCohortInfo {
+            id,
+            time_string,
+            year,
         })
         .collect();
     Ok(TheseusResult {
