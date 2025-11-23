@@ -16,7 +16,7 @@ pub fn list_commits_with_granularity(
     granularity: Granularity,
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
-) -> Result<Vec<Commit>, Box<dyn Error>> {
+) -> Result<Vec<Commit<'_>>, Box<dyn Error>> {
     let revwalk = repo
         .rev_walk(repo.head_id())
         .first_parent_only()
