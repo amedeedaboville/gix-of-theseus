@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use anyhow::Result;
@@ -34,7 +34,7 @@ pub struct AnalyzeArgs {
 }
 #[derive(Debug, Parser)]
 struct TheseusArgs {
-    repo_path: String,
+    repo_path: PathBuf,
     #[clap(short, long)]
     outdir: Option<PathBuf>,
     #[clap(short, long)]
@@ -51,8 +51,9 @@ enum Subcommands {
     Analyze(TheseusArgs),
 }
 
-fn analyze_repo(repo_path: &str, outdir: PathBuf, all_filetypes: bool) -> Result<PathBuf> {
-    let res = theseus::run_theseus(repo_path, all_filetypes).expect("Error running theseus");
+fn analyze_repo(repo_path: &PathBuf, outdir: PathBuf, all_filetypes: bool) -> Result<PathBuf> {
+    let res = theseus::run_theseus(repo_path, all_filetypes)
+        .map_err(|err| anyhow::anyhow!("Error running theseus: {}", err))?;
     let formatted_data = formatter::format_cohort_data(res);
     let cohorts_file = outdir.join("cohorts.json");
     println!("Writing cohort data to {}", cohorts_file.display());
@@ -65,13 +66,22 @@ fn main() -> Result<()> {
         Subcommands::Plot(args) => plot::run_stackplot(args.input_file, args.output_file, None),
         Subcommands::Analyze(args) => {
             let python_runner = plot::get_python_runner();
-            let repo_path = Path::new(&args.repo_path);
-            let repo_name = repo_path.file_name().unwrap().to_str().unwrap();
+            let repo_path = &args.repo_path.canonicalize().map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to canonicalize path: {} - error: {}",
+                    &args.repo_path.display(),
+                    err
+                )
+            })?;
+            let repo_name = repo_path
+                .file_name()
+                .unwrap_or(args.repo_path.as_ref())
+                .to_string_lossy();
 
-            let outdir = args.outdir.unwrap_or_else(|| PathBuf::from(repo_name));
+            let outdir = args.outdir.unwrap_or(args.repo_path.clone());
             fs::create_dir_all(&outdir)?;
             let cohorts_file = analyze_repo(&args.repo_path, outdir.clone(), args.all_filetypes)
-                .expect("Error analyzing repo");
+                .map_err(|err| anyhow::anyhow!("Error analyzing repo: {}", err))?;
             if !args.no_plot {
                 if python_runner.is_some() {
                     let image_file = outdir.join("stackplot.png");
