@@ -16,7 +16,7 @@ pub fn list_commits_with_granularity(
     granularity: Granularity,
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
-) -> Result<Vec<Commit>, Box<dyn Error>> {
+) -> Result<Vec<Commit<'_>>, Box<dyn Error>> {
     let revwalk = repo
         .rev_walk(repo.head_id())
         .first_parent_only()
@@ -32,17 +32,17 @@ pub fn list_commits_with_granularity(
         let datetime = DateTime::from_timestamp(commit_time.seconds, 0).unwrap();
 
         // If the commit is before the start time, end the loop early
-        if let Some(start) = start {
-            if datetime < start {
-                break;
-            }
+        if let Some(start) = start
+            && datetime < start
+        {
+            break;
         }
 
         // If the commit is after the end time, skip this commit
-        if let Some(end) = end {
-            if datetime > end {
-                continue;
-            }
+        if let Some(end) = end
+            && datetime > end
+        {
+            continue;
         }
 
         let key = match granularity {

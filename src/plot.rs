@@ -37,17 +37,7 @@ pub fn run_stackplot(input_file: String, output_file: String, title: Option<Stri
     let mut file = fs::File::create(&path)?;
     file.write_all(STACKPLOT_SCRIPT.as_bytes())?;
 
-    let status = if runner == "uv" {
-        Command::new(&runner)
-            .arg("run")
-            .arg(&path)
-            .arg("--outfile")
-            .arg(output_file)
-            .arg("--title")
-            .arg(title.unwrap_or_default())
-            .arg(input_file)
-            .status()?
-    } else if runner == "pipx" {
+    let status = if ["uv", "pipx"].contains(&runner.as_str()) {
         Command::new(&runner)
             .arg("run")
             .arg(&path)
