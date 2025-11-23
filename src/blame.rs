@@ -109,10 +109,10 @@ impl<CommitKey: Keyable> FileBlame<CommitKey> {
         let mut prev_value: Option<CommitKey> = None;
         let mut keys_to_remove: Vec<LineNumber> = Vec::new();
         for (&k, &v) in self.change_points.iter() {
-            if let Some(prev) = prev_value {
-                if prev == v {
-                    keys_to_remove.push(k);
-                }
+            if let Some(prev) = prev_value
+                && prev == v
+            {
+                keys_to_remove.push(k);
             }
             prev_value = Some(v);
         }
@@ -167,7 +167,7 @@ impl<CommitKey: Keyable> FileBlame<CommitKey> {
         }
         // First key must be 0
         match self.change_points.keys().next() {
-            Some(&key) if key == 0 => {}
+            Some(&0) => {}
             _ => return Err("The first change-point must be at line 0".to_string()),
         }
         // Keys must be strictly increasing and strictly less than total_lines
@@ -176,10 +176,10 @@ impl<CommitKey: Keyable> FileBlame<CommitKey> {
             if key >= self.total_lines {
                 return Err("Change-point key must be < total_lines".to_string());
             }
-            if let Some(prev) = prev_key {
-                if key <= prev {
-                    return Err("Change-point keys must be strictly increasing".to_string());
-                }
+            if let Some(prev) = prev_key
+                && key <= prev
+            {
+                return Err("Change-point keys must be strictly increasing".to_string());
             }
             prev_key = Some(key);
         }
@@ -228,10 +228,10 @@ impl<CommitKey: Keyable> FileBlame<CommitKey> {
         // Helper to append a change point to the new blame only if it's different than the current last one
         let push_cp =
             |pos: LineNumber, cohort: CommitKey, map: &mut BTreeMap<LineNumber, CommitKey>| {
-                if let Some((_, &last_cohort)) = map.last_key_value() {
-                    if last_cohort == cohort {
-                        return;
-                    }
+                if let Some((_, &last_cohort)) = map.last_key_value()
+                    && last_cohort == cohort
+                {
+                    return;
                 }
                 map.insert(pos, cohort);
             };
@@ -280,22 +280,21 @@ impl<CommitKey: Keyable> FileBlame<CommitKey> {
             }
 
             // Copy over the part of the current block that lies after the delete
-            if delete_end < old_total {
-                if let Some(resume_cohort) = self.cohort_at_index(delete_end) {
-                    push_cp(
-                        (delete_start as LineDelta + insert_len as LineDelta + offset)
-                            as LineNumber,
-                        resume_cohort,
-                        &mut new_change_points,
-                    );
-                }
+            if delete_end < old_total
+                && let Some(resume_cohort) = self.cohort_at_index(delete_end)
+            {
+                push_cp(
+                    (delete_start as LineDelta + insert_len as LineDelta + offset) as LineNumber,
+                    resume_cohort,
+                    &mut new_change_points,
+                );
             }
 
             offset += delta;
         }
 
         // Copy over the remaining change points after the last delete
-        while let Some((&line, &line_cohort)) = cp_iter.next() {
+        for (&line, &line_cohort) in cp_iter {
             push_cp(
                 (line as LineDelta + offset) as LineNumber,
                 line_cohort,
